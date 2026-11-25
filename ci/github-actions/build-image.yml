@@ -1,0 +1,49 @@
+# 예시 CI 파이프라인 (애플리케이션 저장소의 .github/workflows/ 에 복사해서 사용)
+#   빌드 → Trivy 스캔 → ECR push (OIDC, Access Key 없음) → GitOps 저장소 태그 갱신
+name: build-image (example)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-2
+  SERVICE: order
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_GITHUB_ROLE_ARN }}   # terraform output github_actions_role_arn
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build
+        run: |
+          IMAGE=${{ steps.ecr.outputs.registry }}/shop/${SERVICE}:${GITHUB_SHA::7}
+          docker build -t "$IMAGE" .
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Trivy scan (HIGH/CRITICAL 이면 실패)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Push
+        run: docker push "$IMAGE"
+
+      # 다음 단계: GitOps 저장소의 values-<service>.yaml image.tag 갱신 PR 생성

@@ -1,0 +1,23 @@
+# Argo CD App of Apps : 이 저장소의 helm/apps/* 를 자동 동기화
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/navy9564/infra_architecture.git
+    targetRevision: main
+    path: helm/manifests
+    directory:
+      # 환경 공통 매니페스트만 동기화 (karpenter-nodepool / metallb-pool 은 환경별로 별도 적용)
+      include: "{gateway,istio-ambient,cert-manager-issuer,external-secrets,otel-collector,kyverno-policies}.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

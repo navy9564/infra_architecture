@@ -1,0 +1,506 @@
+# =============================================================================
+# 인프라 & 플랫폼 서비스 : Monitoring · Logging · CI/CD · Registry · Secrets · Policy
+# =============================================================================
+- id: monitoring
+  num: "12"
+  group: 인프라 & 플랫폼 서비스
+  title: Monitoring & Tracing
+  en: Prometheus · Grafana · OpenTelemetry
+  icon: chart
+  color: "#f97316"
+  oneline: 시스템 상태를 숫자(메트릭)와 요청 흐름(트레이스)으로 관찰하고, 이상 징후를 알람으로 알려줍니다.
+  desc: |
+    모니터링은 **"자동차 계기판 + 블랙박스"** 입니다. 계기판(메트릭)으로 속도·연료를 보고, 사고가 나면 블랙박스(트레이스)로 어떤 경로였는지 되짚습니다.
+    2026 표준은 **수집은 OpenTelemetry 로 통일**, 저장/조회는 Prometheus(메트릭)·Loki(로그)·Tempo/Jaeger(트레이스), 시각화는 Grafana 입니다.
+    OpenTelemetry 는 2026년 5월 CNCF **Graduated** 가 되어 사실상 관측성 표준이 되었습니다.
+  roles:
+    - "메트릭 수집/저장/알람 (Prometheus + Alertmanager)"
+    - "대시보드 (Grafana) — 클러스터/서비스/비즈니스 KPI"
+    - "분산 트레이싱 (OTel SDK/자동계측 → Collector → 백엔드)"
+    - "SLO 기반 알람 (에러율·지연시간 버짓)"
+  trend:
+    - "OpenTelemetry CNCF Graduated (2026-05-21)"
+    - "Prometheus 3.x : OTLP 직접 수신(enableOTLPReceiver), UTF-8 메트릭명"
+    - "관리형 Prometheus(AMP/Azure/GCP) + 자체 Grafana 하이브리드 운영 확산"
+  tools:
+    - { name: Prometheus (kube-prometheus-stack), tag: CNCF Graduated, desc: "메트릭 표준, Operator 기반 ServiceMonitor", pick: true }
+    - { name: OpenTelemetry (Operator/Collector), tag: CNCF Graduated, desc: "메트릭·로그·트레이스 수집 표준", pick: true }
+    - { name: Grafana, tag: OSS (AGPL), desc: "통합 시각화", pick: true }
+    - { name: Thanos / Cortex / Mimir, tag: CNCF Incubating·OSS, desc: "장기 보관·멀티클러스터 집계" }
+    - { name: Jaeger / Grafana Tempo, tag: CNCF Graduated·OSS, desc: "트레이스 저장/조회" }
+    - { name: "Amazon Managed Prometheus / Grafana", tag: Managed, desc: "운영 부담 최소화" }
+  pick: |
+    **kube-prometheus-stack + OpenTelemetry Operator/Collector + Grafana**. 트레이스 백엔드는 2단계에서 Tempo 또는 Jaeger 를 추가합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 15분
+      level: 초급
+      summary: kube-prometheus-stack 과 OpenTelemetry Operator 를 helm_release(for_each)로 설치합니다.
+      steps:
+        - title: 애드온 정의 (kube-prometheus-stack, opentelemetry-operator)
+          file: iac/terraform/aws/05-platform-addons.tf
+        - title: 적용
+          lang: bash
+          code: |
+            terraform apply \
+              -target='helm_release.platform["kube-prometheus-stack"]' \
+              -target='helm_release.platform["opentelemetry-operator"]'
+            kubectl apply -f helm/manifests/otel-collector.yaml
+      verify: |
+        kubectl -n monitoring get pods
+        kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+    ansible:
+      env: On-Premise
+      time: 15분
+      level: 초급
+      summary: 동일한 values 파일로 관측성 스택을 설치합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml \
+              -e '{"addon_only":["kube-prometheus-stack","opentelemetry-operator"]}'
+    helm:
+      env: Any Kubernetes
+      time: 20분
+      level: 중급
+      summary: Prometheus/Grafana 스택과 OTel Operator 를 설치하고, Collector 파이프라인과 자동계측(Instrumentation)을 구성합니다.
+      steps:
+        - title: kube-prometheus-stack values
+          file: helm/values/kube-prometheus-stack.yaml
+        - title: 설치
+          lang: bash
+          code: |
+            cd helm
+            helmfile -e aws -l tier=observability apply
+        - title: Collector + 자동계측
+          file: helm/manifests/otel-collector.yaml
+        - title: 서비스에 자동계측 주입
+          lang: yaml
+          code: |
+            # helm/charts/microservice 값
+            otel:
+              inject: java     # → instrumentation.opentelemetry.io/inject-java 어노테이션
+      verify: |
+        kubectl -n opentelemetry get otelcol,instrumentation
+        kubectl -n monitoring get servicemonitor -A | head
+
+- id: logging
+  num: "13"
+  group: 인프라 & 플랫폼 서비스
+  title: Logging
+  en: Loki · Grafana Alloy (or OpenSearch)
+  icon: logs
+  color: "#14b8a6"
+  oneline: 모든 컨테이너 로그를 중앙에 모아 검색·보관하고, 메트릭/트레이스와 연결해 장애 원인을 찾습니다.
+  desc: |
+    로깅은 **"CCTV 녹화 서버"** 입니다. 평소엔 저장만 하다가, 문제가 생기면 시간·장소(라벨)로 빠르게 돌려봅니다.
+    구성도의 LOGGING(Fluentd + Kibana 계열)은 전통적인 EFK 스택입니다. 2026 기준으로는 비용 효율이 높은 **Loki(오브젝트 스토리지 기반) + Grafana Alloy 수집기** 조합이 확산되었고,
+    전문 검색·보안 분석(SIEM)이 중요하면 **OpenSearch** 를 선택합니다. **Promtail 은 2026-03-02 EOL** 이므로 신규 구성에 사용하지 않습니다.
+  roles:
+    - "수집 : 노드별 DaemonSet 이 컨테이너 stdout/stderr 수집 + K8s 메타데이터 라벨링"
+    - "저장 : 인덱스 최소화(라벨) + 압축 청크를 S3/MinIO 에 저장"
+    - "조회 : Grafana Explore 에서 LogQL, TraceID 로 트레이스와 상호 이동"
+    - "보관 정책 : 법적 보관기간(예: 접속기록 1~2년) 별도 아카이빙"
+  trend:
+    - "Promtail EOL(2026-03) → Grafana Alloy(OTel Collector 기반)로 이전"
+    - "OTLP 로그 직접 수신(Loki native OTLP) — 수집기 단일화"
+    - "Fluent Bit 은 여전히 CNCF Graduated 경량 수집기 표준 (OpenSearch/CloudWatch 연동)"
+  tools:
+    - { name: Grafana Loki, tag: OSS (AGPL), desc: "저비용 로그 저장소", pick: true }
+    - { name: Grafana Alloy, tag: OSS (Apache-2.0), desc: "Promtail 후속 수집기 (OTel 호환)", pick: true }
+    - { name: Fluent Bit / Fluentd, tag: CNCF Graduated, desc: "범용 로그 수집·라우팅" }
+    - { name: OpenSearch + Dashboards, tag: OSS (Linux Foundation), desc: "전문 검색·SIEM, Kibana 대체" }
+    - { name: Amazon CloudWatch Logs, tag: Managed, desc: "AWS 감사/규정 준수 로그 보관" }
+  pick: |
+    **Loki(SimpleScalable, S3 백엔드) + Alloy(DaemonSet)**. 보안관제/전문검색 요구가 있으면 OpenSearch 를 병행합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 20분
+      level: 중급
+      summary: Loki/Alloy 를 helm_release 로 설치합니다. 운영에서는 S3 버킷과 Pod Identity(IAM) 를 함께 구성해야 합니다.
+      prereq:
+        - "Loki 용 S3 버킷 3개(chunks/ruler/admin) 생성 및 helm/values/loki.yaml 의 bucketNames 수정"
+      steps:
+        - title: values (S3 백엔드)
+          file: helm/values/loki.yaml
+        - title: 적용
+          lang: bash
+          code: |
+            terraform apply -target='helm_release.platform["loki"]' -target='helm_release.platform["alloy"]'
+      verify: |
+        kubectl -n logging get pods
+        # Grafana > Explore > Loki : {namespace="shop"}
+    ansible:
+      env: On-Premise
+      time: 20분
+      level: 중급
+      summary: On-Prem 은 MinIO(또는 Ceph RGW) 를 오브젝트 스토리지로 사용합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["loki","alloy"]}'
+      tips:
+        - "검증 환경은 loki.yaml 의 minio.enabled=true 로 내장 MinIO 를 사용할 수 있습니다."
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 중급
+      summary: Grafana 공식 차트로 Loki 와 Alloy 를 설치합니다.
+      steps:
+        - title: Alloy 수집 파이프라인
+          file: helm/values/alloy.yaml
+        - title: 설치
+          lang: bash
+          code: |
+            helm repo add grafana https://grafana.github.io/helm-charts
+            helm upgrade --install loki  grafana/loki  -n logging --create-namespace -f helm/values/loki.yaml
+            helm upgrade --install alloy grafana/alloy -n logging -f helm/values/alloy.yaml
+      verify: |
+        kubectl -n logging logs ds/alloy --tail=20
+
+- id: cicd
+  num: "14"
+  group: 인프라 & 플랫폼 서비스
+  title: CI/CD & GitOps
+  en: GitHub Actions · Argo CD
+  icon: git
+  color: "#6366f1"
+  oneline: 코드 변경을 자동으로 빌드·테스트·이미지화(CI)하고, Git 에 선언된 상태로 클러스터를 동기화(CD)합니다.
+  desc: |
+    CI/CD 는 **"자동화된 생산 라인"** 입니다. CI 는 부품(코드)을 조립·검사해 완제품(이미지)을 만들고, CD(GitOps)는 "설계도(Git)와 매장 진열(클러스터)이 항상 같도록" 맞춥니다.
+    GitOps 의 장점은 **누가 언제 무엇을 바꿨는지 Git 이력으로 남고, 롤백은 git revert 한 번** 이라는 점입니다.
+  roles:
+    - "CI : 빌드 → 단위테스트 → SAST → 이미지 빌드 → 취약점 스캔 → 서명 → 레지스트리 push"
+    - "CD : 이미지 태그를 GitOps 저장소에 반영 → Argo CD 자동 동기화"
+    - "점진 배포 : Argo Rollouts(카나리/블루그린) + Gateway API 가중치 라우팅"
+  trend:
+    - "Argo CD 3.x (3.4/3.5 지원 중) — 내부 mTLS, Source Integrity, Helm 4 지원"
+    - "공급망 보안(SLSA, Sigstore cosign 서명, SBOM) 이 파이프라인 기본 단계로"
+    - "Tekton 은 2026-03 CNCF Incubating, Flux 2.8 등 GitOps 도구 다양화"
+  tools:
+    - { name: Argo CD, tag: CNCF Graduated, desc: "GitOps CD 표준, UI·ApplicationSet", pick: true }
+    - { name: GitHub Actions, tag: SaaS, desc: "OIDC 로 클라우드 키 없이 배포", pick: true }
+    - { name: Flux, tag: CNCF Graduated, desc: "경량 GitOps, 컨트롤러 기반" }
+    - { name: GitLab CI / Jenkins, tag: OSS/Commercial, desc: "On-Prem·폐쇄망 SI 에서 여전히 다수" }
+    - { name: Tekton, tag: CNCF Incubating, desc: "K8s 네이티브 파이프라인" }
+    - { name: Argo Rollouts, tag: CNCF Graduated (Argo), desc: "카나리·블루그린 점진 배포" }
+  pick: |
+    **CI: GitHub Actions(또는 사내 GitLab CI) + OIDC**, **CD: Argo CD(App of Apps)**. 이미지 태그 갱신은 Argo CD Image Updater 또는 CI 에서 GitOps 저장소에 PR 생성.
+  guides:
+    terraform:
+      env: AWS
+      time: 15분
+      level: 초급
+      summary: Argo CD 를 helm_release 로 설치하고, GitHub Actions 가 장기 Access Key 없이 ECR 에 푸시할 수 있도록 OIDC Role 을 생성합니다.
+      steps:
+        - title: Argo CD values
+          file: helm/values/argo-cd.yaml
+        - title: GitHub OIDC Role
+          file: iac/terraform/aws/07-registry.tf
+        - title: 적용 + App of Apps
+          lang: bash
+          code: |
+            terraform apply -target='helm_release.platform["argo-cd"]' -target=aws_iam_role.github_ecr_push
+            kubectl apply -f helm/argocd/root-app.yaml
+      verify: |
+        kubectl -n argocd get applications
+        kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+    ansible:
+      env: On-Premise
+      time: 10분
+      level: 초급
+      summary: Argo CD 를 설치하고 사내 Git(GitLab 등) 저장소를 등록합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["argo-cd"]}'
+        - title: 사내 Git 저장소 등록
+          lang: bash
+          code: |
+            argocd repo add https://gitlab.example.com/platform/gitops.git \
+              --username deploy-bot --password "$GITLAB_TOKEN"
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 초급
+      summary: Argo CD 를 HA 구성으로 설치하고 App of Apps 로 플랫폼 매니페스트를 자동 동기화합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            helm repo add argo https://argoproj.github.io/argo-helm
+            helm upgrade --install argo-cd argo/argo-cd -n argocd --create-namespace -f helm/values/argo-cd.yaml
+        - title: App of Apps
+          file: helm/argocd/root-app.yaml
+        - title: CI 예시 (GitHub Actions → ECR)
+          file: ci/github-actions/build-image.yml
+      verify: |
+        kubectl -n argocd get app root -o jsonpath='{.status.sync.status}'   # Synced
+
+- id: registry
+  num: "15"
+  group: 인프라 & 플랫폼 서비스
+  title: Container Registry
+  en: Amazon ECR · Harbor
+  icon: package
+  color: "#f59e0b"
+  oneline: 빌드된 컨테이너 이미지를 저장·배포하는 창고. 취약점 스캔과 서명 검증의 기준점입니다.
+  desc: |
+    레지스트리는 **"완제품 창고"** 입니다. 출고(배포) 전에 검수(취약점 스캔)를 거치고, 정품 인증 스티커(서명)가 붙은 제품만 매장(클러스터)에 진열합니다.
+    태그 불변(Immutable) 설정으로 같은 태그에 다른 이미지가 덮어써지는 사고를 원천 차단합니다.
+  roles:
+    - "이미지/Helm 차트(OCI) 저장"
+    - "푸시 시 취약점 스캔, 수명주기 정책(오래된 이미지 정리)"
+    - "폐쇄망 : 외부 레지스트리 프록시 캐시(pull-through)"
+  trend:
+    - "Helm 차트도 OCI 아티팩트로 저장 (Istio·Envoy Gateway·Karpenter 도 OCI 배포)"
+    - "Docker Hub 비인증 pull 제한·Bitnami 카탈로그 변경 → 내부 미러/캐시 필수화"
+  tools:
+    - { name: Amazon ECR, tag: Managed, desc: "IAM 통합, Enhanced Scanning(Inspector)", pick: true }
+    - { name: Harbor, tag: CNCF Graduated, desc: "On-Prem 표준. 스캔(Trivy)·복제·프록시캐시", pick: true }
+    - { name: Dragonfly, tag: CNCF Graduated, desc: "P2P 이미지 배포 가속 (대규모 노드)" }
+    - { name: Zot, tag: CNCF Sandbox, desc: "경량 OCI 레지스트리" }
+  pick: |
+    **AWS: ECR(IMMUTABLE + scan on push + 수명주기)**, **On-Prem/폐쇄망: Harbor(프록시 캐시로 Docker Hub/ghcr/quay 미러)**.
+  guides:
+    terraform:
+      env: AWS
+      time: 5분
+      level: 초급
+      summary: 서비스 목록(var.microservices) 만큼 ECR 리포지토리와 수명주기 정책을 생성합니다.
+      steps:
+        - title: ECR 리소스
+          file: iac/terraform/aws/07-registry.tf
+        - title: 적용
+          lang: bash
+          code: |
+            terraform apply -target=aws_ecr_repository.svc -target=aws_ecr_lifecycle_policy.svc
+      verify: |
+        terraform output ecr_repositories
+    ansible:
+      env: On-Premise
+      time: 30분
+      level: 중급
+      summary: Harbor 를 Helm 으로 설치하고, 노드의 containerd 가 Harbor 를 미러로 사용하도록 구성합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["harbor"]}'
+        - title: containerd 미러 설정 (예시)
+          lang: toml
+          code: |
+            # /etc/containerd/certs.d/docker.io/hosts.toml
+            server = "https://registry-1.docker.io"
+            [host."https://harbor.example.com/v2/dockerhub-proxy"]
+              capabilities = ["pull", "resolve"]
+              override_path = true
+    helm:
+      env: Any Kubernetes
+      time: 20분
+      level: 중급
+      summary: Harbor 공식 차트로 설치합니다. TLS 는 Gateway 에서 종료합니다.
+      steps:
+        - title: values
+          file: helm/values/harbor.yaml
+        - title: 설치
+          lang: bash
+          code: |
+            helm repo add harbor https://helm.goharbor.io
+            helm upgrade --install harbor harbor/harbor -n harbor --create-namespace -f helm/values/harbor.yaml
+
+- id: secrets
+  num: "16"
+  group: 인프라 & 플랫폼 서비스
+  title: Secrets & Config
+  en: External Secrets · Secrets Manager · OpenBao · cert-manager
+  icon: key
+  color: "#ec4899"
+  oneline: 비밀번호·API Key·인증서를 코드와 분리해 중앙 저장소에서 안전하게 주입하고, 자동으로 교체합니다.
+  desc: |
+    시크릿 관리는 **"은행 금고 + 자동 배달"** 입니다. 비밀번호는 금고(Secrets Manager/OpenBao)에만 두고, 필요한 서비스에게만 배달원(External Secrets Operator)이 최신 열쇠를 가져다 줍니다.
+    Git 에는 "어느 금고의 어느 칸" 이라는 **참조만** 남기므로 GitOps 와 보안을 동시에 만족합니다.
+    구성도의 SECRETS AND CONFIG(Vault 계열) 자리는 2026 기준 **OpenBao(Vault 의 오픈소스 포크)** 또는 클라우드 관리형으로 채웁니다.
+  roles:
+    - "중앙 시크릿 저장소 (버전관리·감사로그·접근정책)"
+    - "K8s Secret 동기화 (ExternalSecret → Secret)"
+    - "동적 시크릿 / 자동 로테이션 (DB 계정 등)"
+    - "인증서 수명주기 (cert-manager)"
+  trend:
+    - "External Secrets Operator v2.x — 사실상 표준 동기화 계층"
+    - "HashiCorp Vault BSL 전환 이후 OpenBao(Linux Foundation) 채택 증가 (CNCF 블로그에 CNPG 백엔드 사례)"
+    - "Pod Identity / Workload Identity 로 '시크릿 제로' 문제 완화"
+  tools:
+    - { name: External Secrets Operator, tag: CNCF Sandbox, desc: "다양한 백엔드 → K8s Secret 동기화", pick: true }
+    - { name: AWS Secrets Manager / SSM, tag: Managed, desc: "AWS 표준, RDS 자동 로테이션", pick: true }
+    - { name: OpenBao, tag: OSS (Linux Foundation), desc: "Vault 호환 오픈소스(MPL-2.0)", pick: true }
+    - { name: HashiCorp Vault, tag: Commercial (BSL), desc: "엔터프라이즈 기능·기술지원" }
+    - { name: Sealed Secrets / SOPS, tag: OSS, desc: "Git 암호화 방식 (소규모)" }
+    - { name: cert-manager, tag: CNCF Graduated, desc: "X.509 인증서 자동화" }
+  pick: |
+    **AWS: Secrets Manager + ESO(Pod Identity)**, **On-Prem: OpenBao(HA Raft) + ESO**. 애플리케이션은 표준 K8s Secret 만 읽도록 단순화합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 15분
+      level: 중급
+      summary: ESO 를 설치하고 Aurora 가 Secrets Manager 에 자동 저장한 자격증명을 ExternalSecret 으로 동기화합니다.
+      steps:
+        - title: ESO 설치
+          lang: bash
+          code: |
+            terraform apply -target='helm_release.platform["external-secrets"]'
+        - title: ESO 용 Pod Identity (추가 예시)
+          lang: hcl
+          code: |
+            module "eso_pod_identity" {
+              source  = "terraform-aws-modules/eks-pod-identity/aws"
+              version = "~> 2.0"
+
+              name                                  = "${local.name}-eso"
+              attach_external_secrets_policy        = true
+              external_secrets_secrets_manager_arns = ["arn:aws:secretsmanager:*:*:secret:${local.name}/*"]
+
+              associations = {
+                this = {
+                  cluster_arn     = module.eks.cluster_arn
+                  namespace       = "external-secrets"
+                  service_account = "external-secrets"
+                }
+              }
+            }
+        - title: SecretStore / ExternalSecret
+          file: helm/manifests/external-secrets.yaml
+      verify: |
+        kubectl get clustersecretstore
+        kubectl -n shop get externalsecret order-db-credentials   # SecretSynced
+    ansible:
+      env: On-Premise
+      time: 30분
+      level: 중급
+      summary: OpenBao(HA Raft)와 ESO 를 설치하고 Kubernetes 인증을 연결합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["openbao","external-secrets"]}'
+        - title: 초기화·Unseal·Kubernetes 인증
+          lang: bash
+          code: |
+            kubectl -n openbao exec openbao-0 -- bao operator init       # Unseal Key/Root Token 안전 보관
+            kubectl -n openbao exec openbao-0 -- bao operator unseal <key1>   # x3
+            kubectl -n openbao exec -it openbao-0 -- sh -c '
+              bao login <root-token>
+              bao secrets enable -path=secret kv-v2
+              bao auth enable kubernetes
+              bao write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc
+              bao policy write eso-read - <<EOP
+            path "secret/data/*" { capabilities = ["read"] }
+            EOP
+              bao write auth/kubernetes/role/external-secrets \
+                bound_service_account_names=external-secrets \
+                bound_service_account_namespaces=external-secrets policies=eso-read ttl=1h'
+      tips:
+        - "운영은 Auto-Unseal(HSM/KMS Transit) 구성을 권장합니다. Unseal Key 는 분할 보관(Shamir) 원칙을 지키세요."
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 초급
+      summary: ESO 를 설치하고 백엔드별 SecretStore 를 구성합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            helm repo add external-secrets https://charts.external-secrets.io
+            helm upgrade --install external-secrets external-secrets/external-secrets \
+              -n external-secrets --create-namespace -f helm/values/external-secrets.yaml
+        - title: SecretStore 예시 (AWS / OpenBao)
+          file: helm/manifests/external-secrets.yaml
+
+- id: security
+  num: "17"
+  group: 인프라 & 플랫폼 서비스
+  title: Policy & Runtime Security
+  en: Kyverno · Falco · Trivy
+  icon: shield
+  color: "#10b981"
+  oneline: "(2026 추가 권장) 배포 전 정책 검사, 실행 중 위협 탐지, 이미지 취약점 스캔으로 보안을 자동화합니다."
+  desc: |
+    원본 구성도에는 없지만 2026 년 SI 보안 심사(ISMS-P, 금융 클라우드 가이드)에서 사실상 필수가 된 계층입니다.
+    **"공항 보안"** 에 비유하면 — Kyverno 는 탑승 전 **신분증·짐 검사(Admission)**, Falco 는 기내 **이상행동 감시(Runtime)**, Trivy 는 짐 안의 **위험물 엑스레이(취약점 스캔)** 입니다.
+  roles:
+    - "Admission 정책 : 리소스 제한 필수, latest 태그 금지, 특권 컨테이너 금지, 서명된 이미지만 허용"
+    - "런타임 탐지 : 컨테이너 내 쉘 실행, 민감 파일 접근, 비정상 네트워크"
+    - "취약점/구성 스캔 : 이미지·IaC·K8s 매니페스트 (CI 단계 + 클러스터 상시)"
+  trend:
+    - "Kyverno CNCF Graduated (2026-03) — CEL 기반 정책 지원 확대"
+    - "Falco modern eBPF 드라이버 기본화"
+    - "SBOM/서명 검증(cosign verify) 을 Admission 에서 강제"
+  tools:
+    - { name: Kyverno, tag: CNCF Graduated, desc: "YAML/CEL 기반 정책 엔진", pick: true }
+    - { name: OPA Gatekeeper, tag: CNCF Graduated (OPA), desc: "Rego 기반 정책 (기존 OPA 자산 보유 시)" }
+    - { name: Falco, tag: CNCF Graduated, desc: "런타임 위협 탐지", pick: true }
+    - { name: Trivy, tag: OSS (Aqua), desc: "이미지·IaC·SBOM 스캐너", pick: true }
+    - { name: Amazon GuardDuty EKS / Inspector, tag: Managed, desc: "AWS 관리형 위협 탐지·취약점 관리" }
+  pick: |
+    **Kyverno(Audit → Enforce 단계 전환) + Falco + Trivy(CI)**. AWS 는 GuardDuty EKS Protection 을 함께 활성화합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 10분
+      level: 초급
+      summary: Kyverno 를 helm_release 로 설치하고 기본 정책을 적용합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            terraform apply -target='helm_release.platform["kyverno"]'
+            kubectl apply -f helm/manifests/kyverno-policies.yaml
+        - title: 정책
+          file: helm/manifests/kyverno-policies.yaml
+      verify: |
+        kubectl get clusterpolicy
+        kubectl get policyreport -A
+    ansible:
+      env: On-Premise
+      time: 10분
+      level: 초급
+      summary: Kyverno 와 Falco 를 설치합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["kyverno"]}'
+            helm upgrade --install falco falcosecurity/falco -n falco --create-namespace \
+              -f ../../helm/values/falco.yaml
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 초급
+      summary: Kyverno·Falco 를 Helm 으로 설치하고 CI 에서 Trivy 로 이미지를 스캔합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd helm
+            helmfile -e aws -l tier=security apply
+        - title: Falco values
+          file: helm/values/falco.yaml
+        - title: CI 단계 Trivy 스캔
+          lang: bash
+          code: |
+            trivy image --severity HIGH,CRITICAL --exit-code 1 $IMAGE
+            trivy config iac/terraform/aws        # IaC 오설정 스캔
+      verify: |
+        kubectl -n falco logs ds/falco --tail=20

@@ -1,0 +1,4 @@
+# CloudNativePG Operator : PostgreSQL 클러스터 수명주기 관리 (CNCF Incubating, 2026-11)
+replicaCount: 1
+monitoring:
+  podMonitorEnabled: true

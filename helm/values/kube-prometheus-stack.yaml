@@ -1,0 +1,33 @@
+# Prometheus + Alertmanager + Grafana + node-exporter + kube-state-metrics
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    # 다른 네임스페이스의 ServiceMonitor/PodMonitor 도 모두 수집
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    enableRemoteWriteReceiver: true      # remote write 수신 허용
+    enableOTLPReceiver: true             # OTel Collector -> Prometheus OTLP(HTTP) 수신 (Prometheus 3.x)
+    enableFeatures:
+      - exemplar-storage
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+alertmanager:
+  alertmanagerSpec:
+    replicas: 2
+grafana:
+  replicas: 1
+  defaultDashboardsTimezone: Asia/Seoul
+  persistence:
+    enabled: true
+    size: 10Gi
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki-gateway.logging.svc.cluster.local
+      access: proxy

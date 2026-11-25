@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# 공통 변수 - 프로젝트마다 이 파일만 수정
+# ---------------------------------------------------------------------------
+cluster_name: stdarch-onprem
+
+# Kubernetes (pkgs.k8s.io 저장소는 마이너 버전 단위)
+k8s_minor_version: "1.36"
+pod_cidr: 10.244.0.0/16
+service_cidr: 10.96.0.0/12
+
+# kube-apiserver 가상 IP (HAProxy + Keepalived)
+api_vip: 192.168.10.10
+api_vip_interface: eth0
+api_port: 6443
+
+# 컨테이너 런타임 (Kubernetes 1.36+ 는 containerd 2.x 필수)
+containerd_sandbox_image: registry.k8s.io/pause:3.10
+
+# 폐쇄망: 내부 미러 레지스트리 사용 시 지정 (예: harbor.example.com)
+registry_mirror: ""
+
+# 플랫폼 애드온 설치 대상 (helm/values/*.yaml 을 그대로 재사용)
+helm_values_dir: "{{ playbook_dir }}/../../../helm/values"
+helm_manifests_dir: "{{ playbook_dir }}/../../../helm/manifests"
+
+# 설치 대상 애드온 (순서대로 설치). 특정 애드온만: -e '{"addon_only":["envoy-gateway"]}'
+platform_addons:
+  - { name: cilium,          ns: kube-system,          repo: https://helm.cilium.io/,                            chart: cilium,                  values: cilium.yaml }
+  - { name: metallb,         ns: metallb-system,       repo: https://metallb.github.io/metallb,                  chart: metallb,                 values: metallb.yaml }
+  - { name: envoy-gateway,   ns: envoy-gateway-system, repo: oci://docker.io/envoyproxy,                         chart: gateway-helm,            values: envoy-gateway.yaml }
+  - { name: istio-base,      ns: istio-system,         repo: oci://ghcr.io/istio/release/charts,                 chart: base,                    values: "" }
+  - { name: istiod,          ns: istio-system,         repo: oci://ghcr.io/istio/release/charts,                 chart: istiod,                  values: istio-istiod.yaml }
+  - { name: istio-cni,       ns: istio-system,         repo: oci://ghcr.io/istio/release/charts,                 chart: cni,                     values: istio-cni.yaml }
+  - { name: ztunnel,         ns: istio-system,         repo: oci://ghcr.io/istio/release/charts,                 chart: ztunnel,                 values: "" }
+  - { name: cert-manager,    ns: cert-manager,         repo: https://charts.jetstack.io,                         chart: cert-manager,            values: cert-manager.yaml }
+  - { name: openbao,         ns: openbao,              repo: https://openbao.github.io/openbao-helm,             chart: openbao,                 values: openbao.yaml }
+  - { name: external-secrets, ns: external-secrets,    repo: https://charts.external-secrets.io,                 chart: external-secrets,        values: external-secrets.yaml }
+  - { name: kyverno,         ns: kyverno,              repo: https://kyverno.github.io/kyverno/,                 chart: kyverno,                 values: kyverno.yaml }
+  - { name: kube-prometheus-stack, ns: monitoring,     repo: https://prometheus-community.github.io/helm-charts, chart: kube-prometheus-stack,   values: kube-prometheus-stack.yaml }
+  - { name: loki,            ns: logging,              repo: https://grafana.github.io/helm-charts,              chart: loki,                    values: loki.yaml }
+  - { name: alloy,           ns: logging,              repo: https://grafana.github.io/helm-charts,              chart: alloy,                   values: alloy.yaml }
+  - { name: opentelemetry-operator, ns: opentelemetry, repo: https://open-telemetry.github.io/opentelemetry-helm-charts, chart: opentelemetry-operator, values: opentelemetry-operator.yaml }
+  - { name: argo-cd,         ns: argocd,               repo: https://argoproj.github.io/argo-helm,               chart: argo-cd,                 values: argo-cd.yaml }
+  - { name: harbor,          ns: harbor,               repo: https://helm.goharbor.io,                           chart: harbor,                  values: harbor.yaml }
+  - { name: cloudnative-pg,  ns: cnpg-system,          repo: https://cloudnative-pg.github.io/charts,            chart: cloudnative-pg,          values: cloudnative-pg.yaml }
+  - { name: strimzi,         ns: kafka,                repo: https://strimzi.io/charts/,                         chart: strimzi-kafka-operator,  values: strimzi.yaml }
+  - { name: valkey,          ns: cache,                repo: https://valkey.io/valkey-helm/,                     chart: valkey,                  values: valkey.yaml }
+
+# 차트 버전 고정 (미지정 = 최신)
+chart_versions: {}
+#  argo-cd: "x.y.z"

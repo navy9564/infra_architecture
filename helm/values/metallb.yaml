@@ -1,0 +1,8 @@
+# (On-Premise 전용) MetalLB : 베어메탈/VM 환경의 Service type=LoadBalancer 구현
+controller:
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+      effect: NoSchedule
+speaker:
+  tolerateMaster: true

@@ -1,0 +1,46 @@
+---
+# kubeadm / kubelet / kubectl 설치 (pkgs.k8s.io 커뮤니티 저장소)
+- name: Add Kubernetes repo (RedHat)
+  ansible.builtin.yum_repository:
+    name: kubernetes
+    description: Kubernetes
+    baseurl: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor_version }}/rpm/"
+    gpgkey: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor_version }}/rpm/repodata/repomd.xml.key"
+    gpgcheck: true
+    exclude: kubelet kubeadm kubectl cri-tools kubernetes-cni
+  when: ansible_os_family == 'RedHat'
+
+- name: Add Kubernetes repo (Debian, deb822)
+  ansible.builtin.deb822_repository:
+    name: kubernetes
+    types: [deb]
+    uris: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor_version }}/deb/"
+    suites: ["/"]
+    signed_by: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor_version }}/deb/Release.key"
+  when: ansible_os_family == 'Debian'
+
+- name: Install kubelet/kubeadm/kubectl (RedHat)
+  ansible.builtin.dnf:
+    name: [kubelet, kubeadm, kubectl]
+    disable_excludes: kubernetes
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Install kubelet/kubeadm/kubectl (Debian)
+  ansible.builtin.apt:
+    name: [kubelet, kubeadm, kubectl]
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+- name: Hold kubernetes packages (Debian)
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: [kubelet, kubeadm, kubectl]
+  when: ansible_os_family == 'Debian'
+
+- name: Enable kubelet
+  ansible.builtin.service:
+    name: kubelet
+    enabled: true

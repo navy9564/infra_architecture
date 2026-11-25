@@ -1,0 +1,24 @@
+# cp terraform.tfvars.example terraform.tfvars 후 프로젝트에 맞게 수정
+project            = "shop"
+environment        = "dev"
+region             = "ap-northeast-2"
+vpc_cidr           = "10.10.0.0/16"
+kubernetes_version = "1.36"
+
+cluster_admin_arns = [
+  # "arn:aws:iam::123456789012:role/PlatformAdmin",
+]
+
+# domain_name     = "shop.example.com"
+# route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+use_managed_postgres = true
+use_managed_valkey   = true
+use_managed_kafka    = false # false -> Strimzi(클러스터 내부)
+use_managed_rabbitmq = false # false -> RabbitMQ Cluster Operator
+
+# 운영 환경은 검증된 차트 버전을 반드시 고정
+# chart_versions = {
+#   "argo-cd"               = "x.y.z"
+#   "kube-prometheus-stack" = "x.y.z"
+# }

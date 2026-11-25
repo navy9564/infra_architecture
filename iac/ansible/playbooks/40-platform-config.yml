@@ -1,0 +1,40 @@
+---
+# [5단계] 플랫폼 구성 리소스(CR) 적용 : Gateway, Mesh 정책, 데이터 클러스터 등
+- name: Apply platform manifests
+  hosts: control_plane[0]
+  become: true
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  vars:
+    manifests:
+      - metallb-pool.yaml
+      - gateway.yaml
+      - cert-manager-issuer.yaml
+      - istio-ambient.yaml
+      - external-secrets.yaml
+      - otel-collector.yaml
+      - kyverno-policies.yaml
+      - cnpg-cluster.yaml
+      - kafka-cluster.yaml
+  tasks:
+    - name: Install RabbitMQ Cluster Operator (공식 매니페스트)
+      ansible.builtin.command: >
+        kubectl apply -f https://github.com/rabbitmq/cluster-operator/releases/latest/download/cluster-operator.yml
+      changed_when: true
+
+    - name: Ensure namespaces
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ item }}"
+        state: present
+      loop: [shop, messaging, kafka]
+
+    - name: Apply manifests
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ helm_manifests_dir }}/{{ item }}"
+        apply: true
+        server_side_apply:
+          field_manager: ansible
+      loop: "{{ manifests + ['rabbitmq-cluster.yaml'] }}"

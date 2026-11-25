@@ -1,0 +1,6 @@
+apiVersion: v2
+name: microservice
+description: 표준 마이크로서비스 공통 Helm 차트 (Deployment/Service/HPA/PDB/HTTPRoute/ServiceAccount)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

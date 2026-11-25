@@ -1,0 +1,30 @@
+# RabbitMQ Cluster Operator : 3노드 클러스터 + Quorum Queue
+#   operator 설치: kubectl apply -f https://github.com/rabbitmq/cluster-operator/releases/latest/download/cluster-operator.yml
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: notify-mq
+  namespace: messaging
+spec:
+  replicas: 3
+  image: rabbitmq:4.2-management
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  persistence:
+    storageClassName: gp3
+    storage: 20Gi
+  rabbitmq:
+    additionalConfig: |
+      default_queue_type = quorum
+      cluster_partition_handling = pause_minority
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: notify-mq
+          topologyKey: kubernetes.io/hostname

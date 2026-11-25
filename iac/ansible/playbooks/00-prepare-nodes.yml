@@ -1,0 +1,9 @@
+---
+# [1단계] 모든 K8s 노드 OS 사전 구성 + containerd + kubeadm 패키지
+- name: Prepare Kubernetes nodes
+  hosts: k8s
+  become: true
+  roles:
+    - common
+    - containerd
+    - kubernetes

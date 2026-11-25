@@ -1,0 +1,50 @@
+# IaC 정적 검증 : Terraform fmt/validate, Helm lint/template, Ansible syntax-check, 사이트 번들 최신 여부
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: iac/terraform/aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint common chart
+        run: |
+          helm lint helm/charts/microservice
+          helm lint helm/charts/microservice -f helm/charts/microservice/values-order.yaml
+          helm template order helm/charts/microservice -f helm/charts/microservice/values-order.yaml > /dev/null
+
+  ansible:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: iac/ansible
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install ansible
+      - run: |
+          cp inventory/hosts.ini.example inventory/hosts.ini
+          ansible-playbook site.yml --syntax-check
+
+  site-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install pyyaml
+      - run: python3 scripts/build.py --check

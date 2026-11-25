@@ -1,0 +1,18 @@
+# Envoy Gateway 컨트롤 플레인 (Gateway API 구현체)
+#   - 차트에 Gateway API 표준 CRD 와 Envoy Gateway CRD 가 포함되어 함께 설치된다.
+#   - 실제 데이터플레인(Envoy Proxy)은 Gateway 리소스 생성 시 자동 배포된다.
+#     -> helm/manifests/gateway.yaml 참고
+deployment:
+  replicas: 2
+  pod:
+    nodeSelector:
+      node-role/system: "true"
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+config:
+  envoyGateway:
+    logging:
+      level:
+        default: info

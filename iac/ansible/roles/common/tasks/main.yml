@@ -1,0 +1,64 @@
+---
+# OS 공통 사전 구성 : swap off, 커널 모듈, sysctl, 시간동기화
+- name: Disable swap (runtime)
+  ansible.builtin.command: swapoff -a
+  when: ansible_swaptotal_mb | int > 0
+  changed_when: true
+
+- name: Disable swap (fstab)
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\sswap\s+sw.*)$'
+    replace: '# \1'
+
+- name: Load kernel modules on boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+    mode: "0644"
+
+- name: Load kernel modules now
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: [overlay, br_netfilter]
+
+- name: Kubernetes sysctl params
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+    reload: true
+  loop:
+    - { key: net.bridge.bridge-nf-call-iptables, value: "1" }
+    - { key: net.bridge.bridge-nf-call-ip6tables, value: "1" }
+    - { key: net.ipv4.ip_forward, value: "1" }
+    - { key: fs.inotify.max_user_instances, value: "8192" }
+    - { key: fs.inotify.max_user_watches, value: "524288" }
+
+- name: Install base packages
+  ansible.builtin.package:
+    name: "{{ ['chrony', 'curl', 'jq', 'socat', 'conntrack'] + (['iproute-tc'] if ansible_os_family == 'RedHat' else ['iproute2']) }}"
+    state: present
+
+- name: Enable time sync
+  ansible.builtin.service:
+    name: "{{ 'chronyd' if ansible_os_family == 'RedHat' else 'chrony' }}"
+    state: started
+    enabled: true
+
+- name: SELinux permissive (RHEL 계열, 운영 시 정책 적용 후 enforcing 검토)
+  ansible.posix.selinux:
+    policy: targeted
+    state: permissive
+  when: ansible_os_family == 'RedHat'
+
+- name: Stop firewalld (RHEL 계열 - 보안그룹/물리방화벽으로 통제하는 경우)
+  ansible.builtin.service:
+    name: firewalld
+    state: stopped
+    enabled: false
+  when: ansible_os_family == 'RedHat'
+  failed_when: false

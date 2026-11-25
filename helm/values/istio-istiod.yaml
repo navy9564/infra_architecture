@@ -1,0 +1,12 @@
+# istiod (ambient 프로파일)
+profile: ambient
+pilot:
+  autoscaleMin: 2
+meshConfig:
+  accessLogFile: /dev/stdout
+  enableTracing: true
+  extensionProviders:
+    - name: otel-tracing
+      opentelemetry:
+        service: otel-collector.opentelemetry.svc.cluster.local
+        port: 4317

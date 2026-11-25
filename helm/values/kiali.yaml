@@ -1,0 +1,9 @@
+# Kiali : Istio 메시 토폴로지 시각화
+auth:
+  strategy: anonymous   # 운영은 openid 로 변경
+external_services:
+  prometheus:
+    url: http://kube-prometheus-stack-prometheus.monitoring:9090
+  grafana:
+    enabled: true
+    internal_url: http://kube-prometheus-stack-grafana.monitoring

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>표준 인프라 아키텍처 가이드 · 2026</title>
+  <meta name="description" content="SI 프로젝트용 표준 마이크로서비스 인프라 아키텍처 구성도, 구성요소별 2026 트렌드 솔루션, Terraform · Ansible · Helm 설치 가이드">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232dd4bf' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 3 9.5 5L12 13 2.5 8z'/%3E%3Cpath d='m2.5 12.5 9.5 5 9.5-5'/%3E%3Cpath d='m2.5 16.5 9.5 5 9.5-5'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main">
+      <div class="topbar">
+        <button class="menu-btn" id="menu-btn" aria-label="메뉴">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3.5 6h17M3.5 12h17M3.5 18h17"/></svg>
+        </button>
+        <div class="crumb" id="crumb"></div>
+        <div class="spacer"></div>
+        <a class="btn" href="#diagram">구성도</a>
+        <a class="btn" href="https://github.com/navy9564/infra_architecture" target="_blank" rel="noopener">GitHub</a>
+      </div>
+      <main class="content" id="content"></main>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <!-- 데이터 번들(content/*.yaml → scripts/build.py) → 아이콘 → 구성도 → 앱 -->
+  <script src="assets/js/data/bundle.js"></script>
+  <script src="assets/js/icons.js"></script>
+  <script src="assets/js/diagram.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+# Kyverno 기본 보안 정책 (처음엔 Audit 로 운영 → 위반 정리 후 Enforce 전환)
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-requests-limits
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: validate-resources
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [shop]
+      validate:
+        message: "CPU/Memory requests 와 memory limits 는 필수입니다."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    memory: "?*"
+                    cpu: "?*"
+                  limits:
+                    memory: "?*"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: no-latest
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: "':latest' 태그 이미지는 사용할 수 없습니다."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"

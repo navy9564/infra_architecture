@@ -1,0 +1,16 @@
+# (On-Premise) Cilium CNI : eBPF 기반 네트워킹/네트워크 정책 (CNCF Graduated)
+#   Istio ambient 와 함께 사용할 때의 필수 설정 포함
+ipam:
+  mode: kubernetes
+kubeProxyReplacement: false
+cni:
+  exclusive: false          # istio-cni 와 체이닝 허용
+socketLB:
+  hostNamespaceOnly: true   # ambient(ztunnel) 리다이렉션과 충돌 방지
+hubble:
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+operator:
+  replicas: 2

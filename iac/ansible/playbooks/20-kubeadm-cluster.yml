@@ -1,0 +1,73 @@
+---
+# [3단계] kubeadm 으로 HA 클러스터 구성 (stacked etcd, Control Plane 3대)
+- name: Initialize first control plane
+  hosts: control_plane[0]
+  become: true
+  tasks:
+    - name: Check if cluster already initialized
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf
+
+    - name: Write kubeadm config
+      ansible.builtin.copy:
+        dest: /root/kubeadm-config.yaml
+        mode: "0600"
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta4
+          kind: ClusterConfiguration
+          clusterName: {{ cluster_name }}
+          controlPlaneEndpoint: "{{ api_vip }}:{{ api_port }}"
+          networking:
+            podSubnet: {{ pod_cidr }}
+            serviceSubnet: {{ service_cidr }}
+          ---
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          cgroupDriver: systemd
+          serverTLSBootstrap: true
+
+    - name: kubeadm init
+      ansible.builtin.command: kubeadm init --config /root/kubeadm-config.yaml --upload-certs
+      when: not admin_conf.stat.exists
+      register: kubeadm_init
+      changed_when: true
+
+    - name: Setup kubeconfig for root
+      ansible.builtin.shell: |
+        mkdir -p /root/.kube && cp -f /etc/kubernetes/admin.conf /root/.kube/config
+      changed_when: false
+
+    - name: Generate certificate key for control plane join
+      ansible.builtin.shell: kubeadm init phase upload-certs --upload-certs | tail -1
+      register: cert_key
+      changed_when: false
+
+    - name: Generate join command
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: join_cmd
+      changed_when: false
+
+    - name: Share join info
+      ansible.builtin.set_fact:
+        worker_join: "{{ join_cmd.stdout }}"
+        cp_join: "{{ join_cmd.stdout }} --control-plane --certificate-key {{ cert_key.stdout }}"
+
+- name: Join remaining control planes
+  hosts: control_plane[1:]
+  become: true
+  serial: 1
+  tasks:
+    - name: Join as control plane
+      ansible.builtin.command: "{{ hostvars[groups['control_plane'][0]].cp_join }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+
+- name: Join workers
+  hosts: workers
+  become: true
+  tasks:
+    - name: Join as worker
+      ansible.builtin.command: "{{ hostvars[groups['control_plane'][0]].worker_join }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf

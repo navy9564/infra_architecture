@@ -1,0 +1,7 @@
+---
+# 전체 구성 : ansible-playbook site.yml
+- import_playbook: playbooks/00-prepare-nodes.yml
+- import_playbook: playbooks/10-loadbalancer.yml
+- import_playbook: playbooks/20-kubeadm-cluster.yml
+- import_playbook: playbooks/30-platform-addons.yml
+- import_playbook: playbooks/40-platform-config.yml

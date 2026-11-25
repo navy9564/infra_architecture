@@ -1,0 +1,7 @@
+# OpenTelemetry Operator : Collector 관리 + 언어별 자동계측(Instrumentation CR) 주입
+manager:
+  collectorImage:
+    repository: otel/opentelemetry-collector-k8s
+admissionWebhooks:
+  certManager:
+    enabled: true   # cert-manager 선행 설치 필요

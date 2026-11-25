@@ -1,0 +1,349 @@
+# =============================================================================
+# 트래픽 진입 계층 : Users/Clients & Edge → Load Balancer → API Gateway
+# =============================================================================
+- id: edge
+  num: "01"
+  group: 트래픽 진입 (North-South)
+  title: Users / Clients & Edge
+  en: DNS · CDN · WAF · TLS
+  icon: globe
+  color: "#94a3b8"
+  oneline: 사용자 요청이 시스템에 들어오는 첫 관문. 이름 해석, 정적 캐싱, 웹 공격 차단, 암호화를 담당합니다.
+  desc: |
+    구성도 최상단의 **Mobile App · Web Browser · External API** 는 모두 동일한 공개 엔드포인트(예: `api.example.com`)로 들어옵니다.
+    이 구간을 흔히 "Edge" 라고 부르며, 실무에서는 **DNS → CDN → WAF → TLS 종료** 순서로 구성합니다.
+    쉬운 비유로, 백화점의 **정문 안내데스크 + 보안검색대** 입니다. 손님(요청)이 어느 매장(서비스)으로 갈지 묻기 전에, 수상한 손님(봇·SQLi·DDoS)을 먼저 걸러냅니다.
+  roles:
+    - "DNS : 도메인 → 로드밸런서 주소 매핑, 헬스체크 기반 장애 조치(Failover)·지연시간 기반 라우팅"
+    - "CDN : 정적 리소스(이미지/JS/CSS) 캐싱, 원본 부하 감소, TLS 종료 지점 분산"
+    - "WAF : OWASP Top 10(SQLi, XSS), 봇·크리덴셜 스터핑, Rate 기반 차단"
+    - "TLS : TLS 1.3 + HSTS, 인증서 자동 갱신(ACM / cert-manager)"
+  trend:
+    - "TLS 1.3 기본, 인증서 수명 단축 추세 → 자동 발급·갱신(ACM, cert-manager)이 필수"
+    - "API 트래픽 비중 증가로 WAF 에 Bot Control·API 스키마 검증 기능 활용 확대"
+    - "Gateway API 의 TLS 기능이 성숙하면서, Edge 는 '보안·캐시', Gateway 는 '라우팅·인증'으로 역할 분리"
+  tools:
+    - { name: AWS CloudFront + WAF + Route 53, tag: Managed, desc: "AWS 표준 Edge 조합. Shield Standard 기본 포함", pick: true }
+    - { name: Cloudflare, tag: Commercial, desc: "멀티클라우드 공통 Edge, DNS·CDN·WAF·Zero Trust 통합" }
+    - { name: Akamai / 국내 CDN(효성·KT 등), tag: Commercial, desc: "대규모 트래픽·국내 공공/금융 레퍼런스" }
+    - { name: cert-manager, tag: CNCF Graduated, desc: "클러스터 내부 인증서 자동화 (Let's Encrypt / 사설 CA)", pick: true }
+    - { name: ExternalDNS, tag: OSS (kubernetes-sigs), desc: "Gateway/Service 의 호스트명을 DNS 에 자동 등록" }
+  pick: |
+    **AWS: Route 53 + CloudFront + AWS WAF + ACM**, On-Prem: 기존 L7 WAF/GSLB 어플라이언스 + **cert-manager(사설 CA)**.
+    API 전용 도메인은 CDN 캐시를 끄고(WAF 만 통과) 정적 도메인과 분리하는 것을 권장합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 20분
+      level: 초급
+      summary: ACM 인증서 발급과 Route 53 DNS 검증을 Terraform 으로 자동화합니다. (CloudFront/WAF 는 2단계 확장 예정)
+      prereq:
+        - Route 53 Hosted Zone 이 이미 존재 (도메인 위임 완료)
+        - "terraform.tfvars 에 domain_name, route53_zone_id 지정"
+      steps:
+        - title: 변수 설정
+          desc: 도메인과 Hosted Zone ID 를 지정하면 ACM 와일드카드 인증서와 DNS 검증 레코드가 함께 생성됩니다.
+          lang: hcl
+          code: |
+            # terraform.tfvars
+            domain_name     = "shop.example.com"
+            route53_zone_id = "Z0123456789ABCDEFGHIJ"
+        - title: ACM + Route 53 검증 리소스
+          desc: "`04-load-balancer.tf` 하단의 ACM 리소스가 이 역할을 합니다."
+          file: iac/terraform/aws/04-load-balancer.tf
+        - title: 적용
+          lang: bash
+          code: |
+            cd iac/terraform/aws
+            terraform init
+            terraform apply -target=aws_acm_certificate_validation.this
+      verify: |
+        terraform output acm_certificate_arn
+        aws acm describe-certificate --certificate-arn $(terraform output -raw acm_certificate_arn) \
+          --query 'Certificate.Status'   # "ISSUED"
+      rollback: |
+        terraform destroy -target=aws_acm_certificate_validation.this -target=aws_acm_certificate.this
+      tips:
+        - CloudFront 용 인증서는 반드시 us-east-1 리전에 발급해야 합니다. (provider alias 필요)
+        - API 도메인과 정적 리소스 도메인(cdn.example.com)을 분리하면 캐시 정책과 WAF 규칙을 독립적으로 운영할 수 있습니다.
+    ansible:
+      env: On-Premise
+      time: 30분
+      level: 중급
+      summary: 폐쇄망/사내망에서는 cert-manager 의 사설 CA(ClusterIssuer)로 내부 인증서를 자동화하고, 외부 Edge(WAF/GSLB)는 기존 어플라이언스를 사용합니다.
+      prereq:
+        - 30-platform-addons.yml 로 cert-manager 설치 완료
+        - 사내 Root/Intermediate CA 인증서와 키 (보안팀 발급)
+      steps:
+        - title: 사내 CA 를 Secret 으로 등록
+          lang: bash
+          code: |
+            kubectl -n cert-manager create secret tls corp-ca \
+              --cert=intermediate-ca.crt --key=intermediate-ca.key
+        - title: CA ClusterIssuer 생성
+          lang: yaml
+          code: |
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: corp-ca
+            spec:
+              ca:
+                secretName: corp-ca
+        - title: Ansible 로 적용 (재실행 안전)
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["cert-manager"]}'
+      verify: |
+        kubectl get clusterissuer corp-ca -o wide   # READY=True
+      tips:
+        - 외부 WAF/L7 장비에서 TLS 를 종료하는 경우, 장비→Gateway 구간도 재암호화(TLS re-encrypt)하는 것이 금융권 심사 기준입니다.
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 초급
+      summary: cert-manager 를 Helm 으로 설치하고 Let's Encrypt(Gateway API HTTP-01) ClusterIssuer 를 생성합니다.
+      prereq:
+        - Envoy Gateway 와 public Gateway 가 먼저 배포되어 있어야 HTTP-01 검증이 가능합니다.
+      steps:
+        - title: cert-manager 설치
+          lang: bash
+          code: |
+            cd helm
+            helmfile -e aws -l name=cert-manager apply
+            # 또는 단독 설치
+            helm upgrade --install cert-manager jetstack/cert-manager \
+              -n cert-manager --create-namespace -f values/cert-manager.yaml
+        - title: values (Gateway API 연동 활성화)
+          file: helm/values/cert-manager.yaml
+        - title: ClusterIssuer 적용
+          file: helm/manifests/cert-manager-issuer.yaml
+      verify: |
+        kubectl -n cert-manager get pods
+        kubectl get clusterissuer letsencrypt-prod
+        kubectl get certificate -A
+      rollback: |
+        helm uninstall cert-manager -n cert-manager
+        # CRD 는 데이터 보호를 위해 자동 삭제되지 않음 (필요 시 수동 삭제)
+
+- id: lb
+  num: "02"
+  group: 트래픽 진입 (North-South)
+  title: Load Balancer
+  en: L4 Load Balancing
+  icon: share
+  color: "#a78bfa"
+  oneline: TCP 커넥션을 여러 Gateway 인스턴스로 고르게 분산하고, 장애 인스턴스를 자동으로 제외합니다.
+  desc: |
+    로드밸런서는 **"어느 계산대로 갈지 안내하는 직원"** 입니다. 내용(HTTP 경로)은 보지 않고, 빈 계산대(정상 Pod)로 손님을 보냅니다.
+    2026 표준은 **L4(NLB)는 단순하게, L7 판단은 Gateway(Envoy)에 집중** 시키는 구조입니다.
+    이렇게 하면 클라우드를 바꿔도 L7 정책(라우팅·인증·레이트리밋)은 그대로 유지됩니다.
+  roles:
+    - "L4 TCP/UDP 분산, Cross-Zone 분산, 헬스체크"
+    - "Pod IP 직접 타깃(target-type=ip)으로 불필요한 노드 홉 제거"
+    - "고정 IP/EIP 제공 (방화벽 화이트리스트 대상)"
+    - "On-Prem: kube-apiserver VIP(HAProxy+Keepalived) 와 서비스 LB(MetalLB) 두 종류를 구분"
+  trend:
+    - "ALB Ingress 대신 'NLB + Gateway API 구현체' 조합 확산 (벤더 종속 어노테이션 최소화)"
+    - "EKS Auto Mode/관리형 LB 컨트롤러 기본 탑재 증가"
+    - "On-Prem 은 MetalLB(BGP) 또는 Cilium LB-IPAM 으로 표준화"
+  tools:
+    - { name: AWS Load Balancer Controller (NLB), tag: OSS (kubernetes-sigs), desc: "Service type=LoadBalancer → NLB 자동 생성", pick: true }
+    - { name: MetalLB, tag: CNCF Sandbox, desc: "베어메탈 L2/BGP 로드밸런서", pick: true }
+    - { name: Cilium LB-IPAM + BGP, tag: CNCF Graduated, desc: "Cilium CNI 사용 시 별도 컴포넌트 없이 LB 구현" }
+    - { name: HAProxy + Keepalived, tag: OSS, desc: "kube-apiserver VIP, 전통적 L4 이중화" }
+    - { name: F5 BIG-IP / Citrix ADC, tag: Commercial, desc: "기존 레거시 L4/L7 장비 연동 (CIS 컨트롤러)" }
+  pick: |
+    **AWS: AWS Load Balancer Controller + NLB(target-type ip)**, **On-Prem: MetalLB(L2 → 규모가 크면 BGP) + HAProxy/Keepalived(API VIP)**.
+  guides:
+    terraform:
+      env: AWS
+      time: 15분
+      level: 초급
+      summary: EKS Pod Identity 로 권한을 연결한 AWS Load Balancer Controller 를 Helm provider 로 설치합니다.
+      prereq:
+        - 02-eks.tf 로 클러스터 생성 완료
+        - "public 서브넷 태그 kubernetes.io/role/elb=1 (01-vpc.tf 에서 자동 설정)"
+      steps:
+        - title: 컨트롤러 + Pod Identity
+          file: iac/terraform/aws/04-load-balancer.tf
+        - title: 적용
+          lang: bash
+          code: |
+            cd iac/terraform/aws
+            terraform apply -target=helm_release.aws_load_balancer_controller
+        - title: NLB 생성 방식 이해
+          desc: Gateway 의 Envoy Service 에 아래 어노테이션이 붙으면 컨트롤러가 NLB 를 만듭니다. (helm/manifests/gateway.yaml 의 EnvoyProxy 리소스)
+          lang: yaml
+          code: |
+            service.beta.kubernetes.io/aws-load-balancer-type: external
+            service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+            service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+      verify: |
+        kubectl -n kube-system get deploy aws-load-balancer-controller
+        kubectl -n envoy-gateway-system get svc -o wide   # EXTERNAL-IP 에 NLB DNS
+      rollback: |
+        # LB 컨트롤러 삭제 전 반드시 type=LoadBalancer Service 를 먼저 삭제 (NLB 고아 리소스 방지)
+        terraform destroy -target=helm_release.aws_load_balancer_controller
+      tips:
+        - "NLB 를 internal 로 두고 CloudFront VPC Origin 으로 연결하면 LB 를 인터넷에 노출하지 않을 수 있습니다."
+    ansible:
+      env: On-Premise
+      time: 40분
+      level: 중급
+      summary: kube-apiserver 용 VIP(HAProxy+Keepalived)와 서비스용 MetalLB 를 Ansible 로 구성합니다.
+      prereq:
+        - LB 전용 VM 2대 (lb01, lb02), VIP 로 쓸 미사용 IP 1개
+        - MetalLB 에 할당할 IP 대역 (네트워크팀 협의)
+      steps:
+        - title: 인벤토리 작성
+          file: iac/ansible/inventory/hosts.ini.example
+        - title: API VIP (HAProxy + Keepalived)
+          file: iac/ansible/playbooks/10-loadbalancer.yml
+        - title: 실행
+          lang: bash
+          code: |
+            cd iac/ansible
+            cp inventory/hosts.ini.example inventory/hosts.ini   # IP 수정
+            ansible-playbook playbooks/10-loadbalancer.yml
+            # 클러스터 구성 후 MetalLB
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["metallb"]}'
+        - title: MetalLB IP 풀
+          file: helm/manifests/metallb-pool.yaml
+      verify: |
+        ip addr show | grep 192.168.10.10           # MASTER 노드에 VIP
+        curl -k https://192.168.10.10:6443/livez    # ok
+        kubectl -n metallb-system get ipaddresspool
+      tips:
+        - L2 모드는 단일 노드로 트래픽이 몰리므로 대규모 트래픽은 BGP 모드(ToR 스위치 피어링)로 전환하세요.
+    helm:
+      env: Any Kubernetes
+      time: 10분
+      level: 초급
+      summary: 클라우드 LB 가 없는 환경(On-Prem/Private Cloud)에서 MetalLB 를 Helm 으로 설치합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd helm
+            helmfile -e onprem -l name=metallb apply
+            kubectl apply -f manifests/metallb-pool.yaml
+        - title: values
+          file: helm/values/metallb.yaml
+      verify: |
+        kubectl -n metallb-system get pods
+        kubectl get svc -A | grep LoadBalancer   # EXTERNAL-IP 할당 확인
+
+- id: gateway
+  num: "03"
+  group: 트래픽 진입 (North-South)
+  title: API Gateway
+  en: Gateway API · Routing · Auth · Rate Limit
+  icon: route
+  color: "#22c55e"
+  oneline: 외부 요청을 경로/호스트 기준으로 각 마이크로서비스에 라우팅하고, 인증·레이트리밋을 중앙에서 적용합니다.
+  desc: |
+    API Gateway 는 **"건물 로비의 안내 + 출입증 확인 + 입장 인원 제한"** 을 한 곳에서 처리합니다.
+    구성도의 `ROUTING / AUTH / RATE LIMIT` 이 바로 그것입니다.
+    **2026년 가장 큰 변화**: 가장 널리 쓰이던 커뮤니티 `ingress-nginx` 컨트롤러가 **2026년 3월 은퇴**하여 더 이상 보안 패치가 없습니다.
+    따라서 신규 프로젝트는 쿠버네티스 표준인 **Gateway API** 와 그 구현체(Envoy Gateway 등)로 설계해야 합니다.
+  roles:
+    - "ROUTING : Host/Path/Header 기반 라우팅, 가중치 기반 카나리 배포 (HTTPRoute)"
+    - "AUTH : JWT/OIDC 검증, API Key, mTLS 클라이언트 인증 (SecurityPolicy)"
+    - "RATE LIMIT : IP/사용자/API Key 단위 호출 제한 (BackendTrafficPolicy)"
+    - "기타 : CORS, 헤더 변환, 재시도/타임아웃, 서킷브레이커, gRPC/WebSocket"
+  trend:
+    - "ingress-nginx 은퇴(2026-03) → Gateway API 마이그레이션이 사실상 업계 공통 과제"
+    - "Gateway API v1.4 GA : 역할 분리(인프라팀=Gateway, 서비스팀=HTTPRoute)로 멀티테넌시 용이"
+    - "AI 트래픽용 Gateway API Inference Extension, Agent Gateway 등 확장 등장"
+  tools:
+    - { name: Envoy Gateway, tag: CNCF Graduated (Envoy), desc: "Envoy 공식 Gateway API 구현체. 인증/레이트리밋 CRD 내장", pick: true }
+    - { name: Istio Gateway (Gateway API), tag: CNCF Graduated, desc: "메시와 단일 컨트롤플레인. 컴포넌트 수 최소화 시 선택" }
+    - { name: Kong Gateway, tag: Commercial/OSS, desc: "플러그인 생태계·개발자 포털 필요 시" }
+    - { name: NGINX Gateway Fabric, tag: OSS (F5), desc: "NGINX 기반 Gateway API 구현 (ingress-nginx 와 별개 프로젝트)" }
+    - { name: Traefik / Apache APISIX, tag: OSS, desc: "경량/플러그인형 대안" }
+    - { name: ingress-nginx, tag: Retired (2026-03), desc: "신규 도입 금지. 기존 사용 시 마이그레이션 계획 수립 필요" }
+  pick: |
+    **Envoy Gateway** 를 북-남(North-South) API Gateway 로, **Istio ambient** 를 동-서(East-West) 메시로 분리하는 조합을 권장합니다.
+    컴포넌트 수를 줄이고 싶다면 Istio 의 Gateway API 구현으로 일원화할 수 있지만, JWT·레이트리밋 등 API 관리 기능은 Envoy Gateway 쪽이 풍부합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 20분
+      level: 중급
+      summary: Envoy Gateway 컨트롤러를 Terraform helm_release 로 설치하고, Gateway/Route 리소스는 GitOps(또는 kubectl)로 적용합니다.
+      prereq:
+        - AWS Load Balancer Controller 설치 완료 (NLB 생성용)
+        - "addons.envoy_gateway = true (기본값)"
+      steps:
+        - title: helm_release 정의 (for_each 맵의 envoy-gateway 항목)
+          file: iac/terraform/aws/05-platform-addons.tf
+        - title: 적용
+          lang: bash
+          code: |
+            cd iac/terraform/aws
+            terraform apply -target='helm_release.platform["envoy-gateway"]'
+        - title: Gateway / 인증 / 레이트리밋 리소스 적용
+          desc: "CRD 기반 리소스는 Terraform 보다 Git(Argo CD)으로 관리하는 것이 변경 추적에 유리합니다."
+          lang: bash
+          code: |
+            kubectl apply -f helm/manifests/gateway.yaml
+      verify: |
+        kubectl get gatewayclass envoy            # ACCEPTED=True
+        kubectl -n envoy-gateway-system get gateway public
+        kubectl -n envoy-gateway-system get svc   # NLB 주소
+        curl -I http://<NLB-DNS>/                 # 301 → https 리다이렉트
+      rollback: |
+        kubectl delete -f helm/manifests/gateway.yaml
+        terraform destroy -target='helm_release.platform["envoy-gateway"]'
+      tips:
+        - "Gateway API CRD 는 클러스터 전역 리소스입니다. Envoy Gateway 차트가 standard 채널 CRD 를 설치하므로 Istio 보다 먼저 설치합니다."
+        - "기존 ingress-nginx 가 있다면 ingress2gateway 도구로 Ingress → HTTPRoute 변환 후 병행 운영하며 점진 전환하세요."
+    ansible:
+      env: On-Premise
+      time: 20분
+      level: 중급
+      summary: Ansible 의 kubernetes.core.helm 으로 Envoy Gateway 를 설치하고 MetalLB IP 로 노출합니다.
+      prereq:
+        - MetalLB 설치 및 IP 풀 구성 완료
+      steps:
+        - title: 애드온 정의 (group_vars)
+          file: iac/ansible/group_vars/all.yml
+        - title: Envoy Gateway 만 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["envoy-gateway"]}'
+        - title: Gateway 리소스 적용
+          desc: "On-Prem 에서는 gateway.yaml 의 AWS NLB 어노테이션을 제거하거나 metallb.universe.tf/address-pool 어노테이션으로 교체합니다."
+          lang: bash
+          code: |
+            ansible-playbook playbooks/40-platform-config.yml
+      verify: |
+        kubectl -n envoy-gateway-system get svc   # EXTERNAL-IP = MetalLB 풀 IP
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 초급
+      summary: OCI 레지스트리의 공식 차트로 Envoy Gateway 를 설치하고 Gateway·HTTPRoute·SecurityPolicy·BackendTrafficPolicy 를 적용합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+              -n envoy-gateway-system --create-namespace \
+              -f helm/values/envoy-gateway.yaml
+            kubectl wait -n envoy-gateway-system deploy/envoy-gateway \
+              --for=condition=Available --timeout=5m
+        - title: values
+          file: helm/values/envoy-gateway.yaml
+        - title: Gateway + Auth(JWT) + Rate Limit
+          file: helm/manifests/gateway.yaml
+        - title: 서비스 라우트는 공통 차트로
+          desc: "각 서비스의 HTTPRoute 는 helm/charts/microservice 의 httpRoute 값으로 생성합니다."
+          file: helm/charts/microservice/templates/httproute.yaml
+      verify: |
+        kubectl get httproute -A
+        kubectl describe httproute -n shop order   # Accepted / ResolvedRefs = True
+        curl -s https://api.example.com/api/orders -H "Authorization: Bearer $TOKEN"

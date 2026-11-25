@@ -1,0 +1,11 @@
+# cp backend.tf.example backend.tf
+#   Terraform 1.10+ / OpenTofu 1.10+ 는 DynamoDB 없이 S3 자체 잠금(use_lockfile) 지원
+terraform {
+  backend "s3" {
+    bucket       = "CHANGE-ME-tfstate-bucket"
+    key          = "stdarch/dev/terraform.tfstate"
+    region       = "ap-northeast-2"
+    encrypt      = true
+    use_lockfile = true
+  }
+}

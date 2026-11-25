@@ -1,0 +1,12 @@
+# (On-Premise) Harbor : CNCF Graduated 컨테이너 레지스트리 (취약점 스캔/서명/복제)
+expose:
+  type: clusterIP
+  tls:
+    enabled: false   # TLS 는 Gateway 에서 종료
+externalURL: https://harbor.example.com
+persistence:
+  persistentVolumeClaim:
+    registry:
+      size: 200Gi
+trivy:
+  enabled: true

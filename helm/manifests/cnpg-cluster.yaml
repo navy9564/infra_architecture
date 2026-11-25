@@ -1,0 +1,42 @@
+# CloudNativePG : 서비스별 PostgreSQL 클러스터 (Database per Service 패턴)
+#   Primary 1 + Standby 2, 자동 Failover, S3 백업(Barman Cloud 플러그인 권장)
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: order-db
+  namespace: shop
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  primaryUpdateStrategy: unsupervised
+  storage:
+    size: 50Gi
+    storageClass: gp3
+  walStorage:
+    size: 20Gi
+  postgresql:
+    parameters:
+      max_connections: "300"
+      shared_buffers: "1GB"
+  bootstrap:
+    initdb:
+      database: order
+      owner: order
+  monitoring:
+    enablePodMonitor: true
+  affinity:
+    topologyKey: topology.kubernetes.io/zone
+---
+# 커넥션 풀러(PgBouncer)
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: order-db-pooler-rw
+  namespace: shop
+spec:
+  cluster:
+    name: order-db
+  instances: 2
+  type: rw
+  pgbouncer:
+    poolMode: transaction

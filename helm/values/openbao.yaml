@@ -1,0 +1,13 @@
+# (On-Premise/멀티클라우드) OpenBao : Vault 호환 오픈소스 시크릿 저장소 (Linux Foundation)
+server:
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: true
+  dataStorage:
+    size: 10Gi
+injector:
+  enabled: false   # 시크릿 주입은 External Secrets Operator 로 일원화
+ui:
+  enabled: true

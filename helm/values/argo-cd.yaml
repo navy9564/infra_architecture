@@ -1,0 +1,18 @@
+# Argo CD (HA) : GitOps 기반 지속적 배포
+global:
+  domain: argocd.example.com
+configs:
+  params:
+    server.insecure: true          # TLS 는 Gateway(Envoy)에서 종료
+  cm:
+    timeout.reconciliation: 180s
+controller:
+  replicas: 1
+server:
+  replicas: 2
+repoServer:
+  replicas: 2
+applicationSet:
+  replicas: 2
+redis-ha:
+  enabled: true

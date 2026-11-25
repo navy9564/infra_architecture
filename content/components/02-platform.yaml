@@ -1,0 +1,311 @@
+# =============================================================================
+# 컴퓨팅 & 메시 계층 : Kubernetes Cluster → Service Mesh → Microservices
+# =============================================================================
+- id: k8s
+  num: "04"
+  group: 컴퓨팅 & 메시 (East-West)
+  title: Kubernetes Cluster
+  en: Container Orchestration · Node Autoscaling
+  icon: cluster
+  color: "#3b82f6"
+  oneline: 모든 마이크로서비스와 플랫폼 서비스가 올라가는 공통 실행 기반. 환경 차이를 흡수하는 '추상화 계층'입니다.
+  desc: |
+    Kubernetes 는 **"컨테이너 물류센터의 자동 배차 시스템"** 입니다. 몇 개의 트럭(Pod)을 어느 창고(Node)에 보낼지, 고장 나면 어떻게 대체할지를 자동으로 결정합니다.
+    이 가이드의 핵심 전략은 **"클러스터 아래(인프라)는 환경별로 다르게, 클러스터 위(Helm/매니페스트)는 모두 동일하게"** 입니다.
+    AWS 는 EKS + Karpenter, On-Prem 은 kubeadm(HA) + Cilium 을 표준으로 하며, 두 환경 모두 같은 helm/values 를 사용합니다.
+  roles:
+    - "컨트롤 플레인 : API Server, etcd, Scheduler, Controller Manager (EKS 는 AWS 관리)"
+    - "데이터 플레인 : 노드 그룹 분리 (system 노드 = 애드온 전용 / app 노드 = Karpenter 동적 생성)"
+    - "네트워킹 : CNI(VPC CNI / Cilium), CoreDNS, kube-proxy 또는 eBPF 대체"
+    - "스토리지 : CSI 드라이버 (EBS gp3 / Ceph / vSphere CSI), 기본 StorageClass"
+  trend:
+    - "Kubernetes v1.37 (2026-08) 릴리스, EKS 는 1.36 정식 지원(2026-06) — 1.34 표준지원은 2026-12 종료"
+    - "containerd 2.x 필수화 (1.35 가 containerd 1.x 를 지원하는 마지막 버전)"
+    - "Karpenter 가 노드 오토스케일링 표준으로 자리잡음 (Spot·Graviton 혼합, 통합(Consolidation))"
+    - "IRSA → EKS Pod Identity 로 IAM 연결 방식 전환"
+  tools:
+    - { name: Amazon EKS (+Karpenter), tag: Managed, desc: "AWS 표준. Auto Mode 로 노드 관리까지 위임 가능", pick: true }
+    - { name: kubeadm, tag: OSS (Kubernetes), desc: "업스트림 표준 부트스트랩 도구. On-Prem 표준", pick: true }
+    - { name: RKE2 / Rancher, tag: OSS (SUSE), desc: "보안 강화 배포판 + 멀티클러스터 관리 UI" }
+    - { name: OpenShift, tag: Commercial, desc: "엔터프라이즈 기술지원·컴플라이언스 요구 시" }
+    - { name: Cilium, tag: CNCF Graduated, desc: "eBPF CNI·네트워크 정책·Hubble 관측", pick: true }
+    - { name: Karpenter, tag: OSS (kubernetes-sigs), desc: "Just-in-time 노드 프로비저닝" }
+    - { name: Cluster API, tag: OSS (kubernetes-sigs), desc: "클러스터 자체를 선언형으로 관리 (멀티클러스터)" }
+  pick: |
+    **AWS: EKS 1.36 + Karpenter + Pod Identity + VPC CNI(prefix delegation)**,
+    **On-Prem: kubeadm HA(Control Plane 3) + containerd 2.x + Cilium**. 시스템 노드와 앱 노드는 반드시 분리합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 30~40분
+      level: 중급
+      summary: terraform-aws-modules/vpc v6 + eks v21 로 3-AZ VPC, EKS, 시스템 노드그룹, Karpenter 를 한 번에 구성합니다.
+      prereq:
+        - "Terraform ≥ 1.10 또는 OpenTofu ≥ 1.10, AWS CLI v2, kubectl"
+        - "충분한 권한의 IAM (EKS/EC2/IAM/VPC 생성)"
+        - "state 백엔드: backend.tf.example 참고 (S3 + use_lockfile)"
+      steps:
+        - title: 변수 준비
+          file: iac/terraform/aws/terraform.tfvars.example
+        - title: 버전 / Provider
+          desc: "helm provider 3.x 는 kubernetes = { ... } 객체 문법을 사용합니다."
+          file: iac/terraform/aws/providers.tf
+        - title: VPC (public / private / intra)
+          file: iac/terraform/aws/01-vpc.tf
+        - title: EKS 클러스터 (v21 변수명)
+          file: iac/terraform/aws/02-eks.tf
+        - title: Karpenter
+          file: iac/terraform/aws/03-karpenter.tf
+        - title: 실행
+          lang: bash
+          code: |
+            cd iac/terraform/aws
+            cp terraform.tfvars.example terraform.tfvars
+            cp backend.tf.example backend.tf        # 버킷명 수정
+            terraform init
+            terraform plan -out tfplan
+            terraform apply tfplan
+            $(terraform output -raw configure_kubectl)
+        - title: Karpenter NodePool 적용
+          lang: bash
+          code: |
+            export CLUSTER_NAME=$(terraform output -raw cluster_name)
+            export KARPENTER_NODE_ROLE=$(aws iam list-roles \
+              --query "Roles[?starts_with(RoleName, 'Karpenter-${CLUSTER_NAME}')].RoleName | [0]" --output text)
+            envsubst < ../../../helm/manifests/karpenter-nodepool.yaml | kubectl apply -f -
+      verify: |
+        kubectl get nodes -L node-role/system,karpenter.sh/capacity-type
+        kubectl get nodepool,ec2nodeclass
+        kubectl -n kube-system get pods
+      rollback: |
+        # 순서 중요: 워크로드/LB Service 삭제 → Karpenter 노드 정리 → terraform destroy
+        kubectl delete nodepool --all
+        terraform destroy
+      tips:
+        - "운영(prd)은 endpoint_public_access=false 로 자동 전환됩니다. VPN/Bastion(SSM) 경로를 먼저 준비하세요."
+        - "OpenTofu 로 실행해도 동일하게 동작하도록 작성되었습니다 (tofu init / tofu apply)."
+    ansible:
+      env: On-Premise
+      time: 60~90분
+      level: 고급
+      summary: Rocky/RHEL 9 또는 Ubuntu 22.04/24.04 VM 에 containerd 2.x + kubeadm HA 클러스터를 구성하고 Cilium 을 설치합니다.
+      prereq:
+        - "VM: LB 2 / Control Plane 3 / Worker 3 (CP 4vCPU·8GB, Worker 8vCPU·32GB 이상 권장)"
+        - "노드 간 6443, 2379-2380, 10250, 4240(Cilium health), 8472(VXLAN) 통신 허용"
+        - "Ansible ≥ 2.17 (ansible-core), 컬렉션: kubernetes.core, community.general, ansible.posix"
+      steps:
+        - title: 변수 정의
+          file: iac/ansible/group_vars/all.yml
+        - title: OS 공통 설정 role
+          file: iac/ansible/roles/common/tasks/main.yml
+        - title: containerd 2.x role
+          file: iac/ansible/roles/containerd/templates/config.toml.j2
+        - title: kubeadm HA 클러스터
+          file: iac/ansible/playbooks/20-kubeadm-cluster.yml
+        - title: 실행 (CNI 포함)
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/00-prepare-nodes.yml
+            ansible-playbook playbooks/10-loadbalancer.yml
+            ansible-playbook playbooks/20-kubeadm-cluster.yml
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["cilium"]}'
+      verify: |
+        kubectl get nodes -o wide          # 모든 노드 Ready
+        kubectl -n kube-system exec ds/cilium -- cilium-dbg status --brief
+        kubectl get --raw='/readyz?verbose' | tail -3
+      tips:
+        - "폐쇄망은 registry_mirror 변수와 containerd certs.d 설정으로 내부 Harbor 미러를 사용합니다."
+        - "etcd 백업(etcdctl snapshot save)을 cron 으로 등록하는 것을 잊지 마세요."
+    helm:
+      env: Any Kubernetes
+      time: 10분
+      level: 초급
+      summary: 클러스터 생성 자체는 Helm 범위가 아닙니다. 대신 클러스터 생성 직후 공통으로 필요한 기본 애드온(CNI/StorageClass 외)을 확인합니다.
+      steps:
+        - title: 사전 점검
+          lang: bash
+          code: |
+            kubectl version
+            kubectl get storageclass          # default 표시 확인
+            kubectl top nodes                 # metrics-server 동작 확인
+        - title: (On-Prem) Cilium 설치
+          lang: bash
+          code: |
+            helm repo add cilium https://helm.cilium.io/
+            helm upgrade --install cilium cilium/cilium -n kube-system -f helm/values/cilium.yaml
+        - title: Cilium values (Istio ambient 호환 옵션)
+          file: helm/values/cilium.yaml
+      verify: |
+        kubectl get pods -n kube-system -l k8s-app=cilium
+
+- id: mesh
+  num: "05"
+  group: 컴퓨팅 & 메시 (East-West)
+  title: Service Mesh
+  en: Istio Ambient · mTLS · Traffic Policy
+  icon: mesh
+  color: "#38bdf8"
+  oneline: 서비스 간 통신을 애플리케이션 수정 없이 암호화(mTLS)·인가·관측하고, 재시도/타임아웃 같은 트래픽 정책을 적용합니다.
+  desc: |
+    서비스 메시는 **"사내 우편망"** 입니다. 부서(서비스)끼리 주고받는 서류를 자동으로 봉인(mTLS)하고, 누가 누구에게 보냈는지 기록(관측)하며, 허가된 부서만 주고받게(인가) 합니다.
+    과거 사이드카(Pod 마다 Envoy 1개) 방식은 자원 소모와 운영 복잡도가 컸지만, **Istio ambient 모드**는 노드당 ztunnel(L4) + 필요한 곳만 waypoint(L7) 로 분리해 오버헤드를 크게 줄였습니다.
+  roles:
+    - "mTLS 자동화 : 서비스 신원(SPIFFE) 기반 암호화, 인증서 자동 교체"
+    - "인가 : AuthorizationPolicy 로 '누가 누구를 호출할 수 있는가' 를 선언 (Zero Trust)"
+    - "트래픽 관리 : 재시도, 타임아웃, 서킷브레이커, 카나리 (waypoint 필요)"
+    - "Egress 통제 : ServiceEntry 로 등록된 외부 호스트(PG 사 등)만 허용"
+  trend:
+    - "Istio ambient 는 1.24 에서 GA, 2026년 ambient multicluster/multi-network 가 GA 단계로 진입"
+    - "Istio 1.31(2026-08) 부터 Helm 차트 배포 위치가 blob.istio.io / ghcr.io(OCI)로 변경"
+    - "사이드카 모드는 점차 유지보수 중심으로 — 신규 도입은 ambient 우선"
+  tools:
+    - { name: Istio (ambient), tag: CNCF Graduated, desc: "사실상 표준. 사이드카리스 L4/L7 분리 아키텍처", pick: true }
+    - { name: Linkerd, tag: CNCF Graduated, desc: "경량·단순. 단, stable 바이너리 배포 정책 확인 필요" }
+    - { name: Cilium Service Mesh, tag: CNCF Graduated, desc: "eBPF 기반. Cilium CNI 사용 시 통합 운영" }
+    - { name: Kiali, tag: OSS, desc: "Istio 토폴로지/트래픽 시각화 콘솔", pick: true }
+  pick: |
+    **Istio ambient 모드 + Kiali**. 네임스페이스 라벨 한 줄로 mTLS 를 적용하고, L7 정책이 필요한 서비스에만 waypoint 를 배치합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 15분
+      level: 중급
+      summary: Istio base → istiod → cni → ztunnel 을 순서 의존성(depends_on)과 함께 helm_release 로 설치합니다.
+      prereq:
+        - Envoy Gateway(=Gateway API CRD) 선행 설치
+      steps:
+        - title: Istio ambient helm_release (파일 하단)
+          file: iac/terraform/aws/05-platform-addons.tf
+        - title: istiod values (ambient 프로파일 + OTel 트레이싱)
+          file: helm/values/istio-istiod.yaml
+        - title: 적용 및 메시 편입
+          lang: bash
+          code: |
+            terraform apply -target=helm_release.ztunnel
+            kubectl apply -f helm/manifests/istio-ambient.yaml
+      verify: |
+        kubectl -n istio-system get pods                    # istiod, istio-cni, ztunnel
+        kubectl get ns shop --show-labels | grep ambient
+        istioctl ztunnel-config workloads | grep shop       # PROTOCOL=HBONE
+      rollback: |
+        kubectl label ns shop istio.io/dataplane-mode-      # 메시에서 제외 (Pod 재시작 불필요)
+        terraform destroy -target=helm_release.istio_base
+    ansible:
+      env: On-Premise
+      time: 15분
+      level: 중급
+      summary: Cilium 과 함께 사용할 때 필요한 옵션(cni.exclusive=false 등)을 반영해 Istio ambient 를 설치합니다.
+      steps:
+        - title: Istio 관련 애드온만 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml \
+              -e '{"addon_only":["istio-base","istiod","istio-cni","ztunnel"]}'
+        - title: Cilium 호환 설정 확인
+          file: helm/values/cilium.yaml
+      verify: |
+        kubectl -n istio-system get ds ztunnel istio-cni-node
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 중급
+      summary: 공식 OCI 차트로 ambient 프로파일을 설치하고, 네임스페이스를 메시에 편입한 뒤 인가 정책과 Egress 를 적용합니다.
+      steps:
+        - title: 설치 (순서 준수)
+          lang: bash
+          code: |
+            REPO=oci://ghcr.io/istio/release/charts
+            helm upgrade --install istio-base $REPO/base -n istio-system --create-namespace
+            helm upgrade --install istiod    $REPO/istiod  -n istio-system -f helm/values/istio-istiod.yaml --wait
+            helm upgrade --install istio-cni $REPO/cni     -n istio-system -f helm/values/istio-cni.yaml --wait
+            helm upgrade --install ztunnel   $REPO/ztunnel -n istio-system --wait
+        - title: 메시 편입 + waypoint + mTLS STRICT + 인가 + Egress
+          file: helm/manifests/istio-ambient.yaml
+        - title: Kiali (선택)
+          lang: bash
+          code: |
+            helmfile -e aws -l name=kiali-server apply
+      verify: |
+        kubectl -n shop get gateway shop-waypoint
+        kubectl -n shop exec deploy/order -- curl -s payment/healthz   # 허용
+        kubectl -n shop exec deploy/shipping -- curl -s payment/healthz # RBAC: access denied
+
+- id: services
+  num: "06"
+  group: 컴퓨팅 & 메시 (East-West)
+  title: Microservices Domain
+  en: Identity · Catalog · Order · Inventory · Payment · Shipping
+  icon: boxes
+  color: "#f59e0b"
+  oneline: 비즈니스 도메인 단위로 분리된 서비스들. 각자 독립 배포·확장되며 자신만의 데이터베이스를 소유합니다.
+  desc: |
+    마이크로서비스는 **"푸드코트의 개별 매장"** 입니다. 한 매장이 문을 닫아도(장애) 다른 매장은 영업하고, 인기 매장만 직원을 늘릴(스케일아웃) 수 있습니다.
+    구성도의 6개 서비스는 전형적인 커머스 도메인 분할 예시이며, 프로젝트 도메인에 맞게 이름만 바꿔 쓰면 됩니다.
+    인프라 관점의 핵심은 **모든 서비스를 동일한 '공통 Helm 차트'로 배포** 하여 보안·관측·배포 방식을 표준화하는 것입니다.
+  roles:
+    - "Identity : 회원/인증·토큰 발급 (또는 Keycloak 등 IdP 연동)"
+    - "Product Catalog : 상품·가격 조회 (읽기 위주 → 캐시 적극 활용)"
+    - "Order : 주문 생성, 이벤트 발행 (Saga 오케스트레이션)"
+    - "Inventory / Shipping : 이벤트 구독으로 재고 차감·배송 생성 (비동기)"
+    - "Payment : 외부 PG 연동, 멱등성(Idempotency Key) 보장"
+  trend:
+    - "공통 차트 + GitOps 로 '서비스 템플릿(Golden Path)' 제공 → 플랫폼 엔지니어링"
+    - "OpenTelemetry 자동계측(Operator 주입)으로 코드 수정 없이 트레이싱"
+    - "Pod 보안 표준(restricted), 읽기전용 루트FS, non-root 가 기본값"
+  tools:
+    - { name: "공통 Helm 차트 (helm/charts/microservice)", tag: 이 저장소, desc: "Deployment·Service·HPA·PDB·HTTPRoute·SA 일괄 생성", pick: true }
+    - { name: Spring Boot 3 / Node.js / Go, tag: Framework, desc: "언어 무관 — health probe, OTLP 내보내기만 준수" }
+    - { name: Dapr, tag: CNCF Graduated, desc: "Pub/Sub·상태저장·바인딩을 사이드카 API 로 추상화 (선택)" }
+    - { name: KEDA, tag: CNCF Graduated, desc: "Kafka lag / RabbitMQ 큐 길이 기반 오토스케일링 (Worker 에 적합)" }
+  pick: |
+    **공통 차트 1개 + 서비스별 values 파일** 방식. Worker(Notification/Email)는 KEDA 로 큐 길이 기반 스케일링을 권장합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 10분
+      level: 초급
+      summary: 애플리케이션 배포는 Terraform 이 아닌 GitOps(Argo CD)로 하는 것을 원칙으로 합니다. Terraform 은 ECR 리포지토리와 CI 권한(OIDC)까지만 준비합니다.
+      steps:
+        - title: 서비스별 ECR + GitHub OIDC Role
+          file: iac/terraform/aws/07-registry.tf
+        - title: 출력값 확인
+          lang: bash
+          code: |
+            terraform output ecr_repositories
+            terraform output github_actions_role_arn
+      tips:
+        - "Terraform 으로 애플리케이션까지 배포하면 이미지 태그 변경마다 plan/apply 가 필요해 배포 주기가 느려집니다."
+    ansible:
+      env: On-Premise
+      time: 10분
+      level: 초급
+      summary: On-Prem 도 동일한 공통 차트를 Argo CD 로 배포합니다. Ansible 은 네임스페이스·라벨 등 초기 구성만 담당합니다.
+      steps:
+        - title: 네임스페이스 및 메시 라벨 적용
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/40-platform-config.yml
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 초급
+      summary: 공통 microservice 차트로 서비스를 배포합니다. 서비스 추가는 values 파일 하나만 작성하면 됩니다.
+      steps:
+        - title: 차트 기본값
+          file: helm/charts/microservice/values.yaml
+        - title: 서비스별 오버라이드 예시 (order)
+          file: helm/charts/microservice/values-order.yaml
+        - title: Deployment 템플릿 (보안 기본값 포함)
+          file: helm/charts/microservice/templates/deployment.yaml
+        - title: 배포
+          lang: bash
+          code: |
+            helm lint helm/charts/microservice -f helm/charts/microservice/values-order.yaml
+            helm upgrade --install order helm/charts/microservice \
+              -n shop -f helm/charts/microservice/values-order.yaml
+      verify: |
+        kubectl -n shop get deploy,svc,hpa,pdb,httproute -l app.kubernetes.io/instance=order
+        kubectl -n shop rollout status deploy/order

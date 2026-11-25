@@ -1,0 +1,404 @@
+# =============================================================================
+# 데이터 & 메시징 계층 : Database → Cache → Event Streaming → Message Queue → External
+# =============================================================================
+- id: database
+  num: "07"
+  group: 데이터 & 메시징
+  title: Database (per Service)
+  en: PostgreSQL · Database-per-Service
+  icon: database
+  color: "#60a5fa"
+  oneline: 각 서비스가 자기 데이터만 소유하는 Database-per-Service 패턴. 서비스 간 데이터 공유는 API 와 이벤트로만 합니다.
+  desc: |
+    구성도에서 각 서비스 옆의 코끼리 아이콘이 바로 **서비스별 PostgreSQL** 입니다.
+    **"각 매장이 자기 창고 열쇠를 갖는 것"** 과 같습니다. 다른 매장 창고를 직접 열지 않고(공유 DB 금지), 필요하면 매장에 물어봅니다(API/이벤트).
+    물리적으로는 하나의 Aurora 클러스터 안에 서비스별 **데이터베이스/스키마 + 계정** 을 분리하는 "논리 분리"부터 시작하고, 부하가 큰 서비스만 물리 분리하는 것이 비용 효율적입니다.
+  roles:
+    - "트랜잭션 데이터 저장 (주문·결제는 강한 일관성 필요)"
+    - "고가용성 : Multi-AZ 복제, 자동 Failover"
+    - "백업/PITR(시점 복구), 암호화(저장·전송)"
+    - "커넥션 풀링 (RDS Proxy / PgBouncer) — 오토스케일링 시 커넥션 폭증 방지"
+  trend:
+    - "CloudNativePG 가 2026-11 CNCF Incubating 으로 승격 — 'Postgres on Kubernetes' 표준 Operator"
+    - "PostgreSQL 17/18 세대, Aurora PostgreSQL 은 17 계열 사용 가능"
+    - "Bitnami 차트 정책 변경(2025-08)으로 DB 를 Helm 단일 차트로 띄우던 방식 → Operator 로 이동"
+  tools:
+    - { name: Amazon Aurora PostgreSQL, tag: Managed, desc: "AWS 표준. 스토리지 자동 확장, 빠른 Failover", pick: true }
+    - { name: CloudNativePG, tag: CNCF Incubating, desc: "K8s 네이티브 PG Operator, 자동 Failover·백업·Pooler", pick: true }
+    - { name: Crunchy PGO / Zalando Operator, tag: OSS, desc: "대안 PG Operator" }
+    - { name: MySQL (RDS / Percona Operator), tag: Managed/OSS, desc: "기존 MySQL 자산이 많은 경우" }
+  pick: |
+    **AWS: Aurora PostgreSQL(관리형)**, **On-Prem/Private: CloudNativePG**. 두 경우 모두 자격증명은 External Secrets 로 주입합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 20~30분
+      level: 중급
+      summary: intra 서브넷에 Aurora PostgreSQL 을 생성하고 마스터 비밀번호를 Secrets Manager 에 자동 저장합니다.
+      prereq:
+        - "use_managed_postgres = true"
+      steps:
+        - title: 데이터 계층 보안그룹 + Aurora
+          file: iac/terraform/aws/06-data-services.tf
+        - title: 적용
+          lang: bash
+          code: |
+            terraform apply -target=module.aurora
+            terraform output aurora_endpoint
+        - title: 서비스별 DB/계정 생성 (최초 1회)
+          lang: sql
+          code: |
+            CREATE ROLE "order" LOGIN PASSWORD '<from-secrets-manager>';
+            CREATE DATABASE "order" OWNER "order";
+            REVOKE ALL ON DATABASE "order" FROM PUBLIC;
+      verify: |
+        aws rds describe-db-clusters --query 'DBClusters[].{id:DBClusterIdentifier,status:Status,multiAZ:MultiAZ}'
+      tips:
+        - "서비스 계정 비밀번호는 Secrets Manager 에 저장 → helm/manifests/external-secrets.yaml 의 ExternalSecret 으로 Pod 에 주입합니다."
+    ansible:
+      env: On-Premise
+      time: 20분
+      level: 중급
+      summary: CloudNativePG Operator 를 설치하고 서비스별 PostgreSQL 클러스터(Primary 1 + Standby 2)를 생성합니다.
+      steps:
+        - title: Operator 설치 + 클러스터 생성
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["cloudnative-pg"]}'
+            ansible-playbook playbooks/40-platform-config.yml
+        - title: 클러스터 정의
+          file: helm/manifests/cnpg-cluster.yaml
+      verify: |
+        kubectl -n shop get cluster order-db       # STATUS: Cluster in healthy state
+        kubectl -n shop get pods -l cnpg.io/cluster=order-db
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 중급
+      summary: CNPG Operator 를 Helm 으로 설치하고 Cluster/Pooler CR 을 적용합니다.
+      steps:
+        - title: Operator 설치
+          lang: bash
+          code: |
+            helm repo add cnpg https://cloudnative-pg.github.io/charts
+            helm upgrade --install cloudnative-pg cnpg/cloudnative-pg \
+              -n cnpg-system --create-namespace -f helm/values/cloudnative-pg.yaml
+        - title: Cluster + Pooler
+          file: helm/manifests/cnpg-cluster.yaml
+        - title: 적용
+          lang: bash
+          code: |
+            kubectl apply -f helm/manifests/cnpg-cluster.yaml
+      verify: |
+        kubectl -n shop get cluster,pooler
+        kubectl -n shop get secret order-db-app -o jsonpath='{.data.uri}' | base64 -d
+      tips:
+        - "백업은 Barman Cloud 플러그인 + S3/MinIO 를 구성하고 복구 리허설을 정기적으로 수행하세요."
+
+- id: cache
+  num: "08"
+  group: 데이터 & 메시징
+  title: Cache
+  en: Valkey (Redis OSS 호환)
+  icon: bolt
+  color: "#ef4444"
+  oneline: 자주 읽는 데이터를 메모리에 보관해 DB 부하와 응답시간을 줄입니다. 세션·레이트리밋 카운터에도 사용합니다.
+  desc: |
+    캐시는 **"계산대 옆 인기상품 진열대"** 입니다. 매번 창고(DB)까지 가지 않고 바로 꺼내 줍니다.
+    구성도의 REDIS CACHE 자리에 2026 기준으로는 **Valkey** 를 권장합니다. Redis 의 라이선스 변경 이후 Linux Foundation 산하에서 포크된 프로젝트로, Redis OSS 프로토콜과 호환되며 AWS/GCP 관리형 서비스도 Valkey 를 지원합니다.
+  roles:
+    - "Cache-aside 패턴 : 상품 카탈로그·가격 조회 캐싱 (TTL 기반 무효화)"
+    - "세션/토큰 블랙리스트 저장"
+    - "분산 락, 레이트리밋 카운터, 실시간 랭킹(Sorted Set)"
+  trend:
+    - "Valkey 공식 Helm 차트(valkey-io/valkey-helm) 제공 — Bitnami 의존 탈피"
+    - "ElastiCache / Memorystore 가 Valkey 엔진을 지원하며 Redis 대비 비용 이점"
+  tools:
+    - { name: ElastiCache for Valkey, tag: Managed, desc: "AWS 관리형, Multi-AZ 자동 Failover", pick: true }
+    - { name: Valkey (official Helm), tag: OSS (Linux Foundation), desc: "클러스터 내부 자체 운영", pick: true }
+    - { name: Redis (8.x), tag: Commercial/AGPL, desc: "라이선스 조건 검토 후 사용" }
+    - { name: Dragonfly, tag: OSS (BSL), desc: "멀티스레드 고성능 Redis 호환 (CNCF Dragonfly 와는 다른 프로젝트)" }
+  pick: |
+    **AWS: ElastiCache for Valkey (cluster mode, TLS)**, **On-Prem: Valkey 공식 Helm 차트(replica 구성)**.
+  guides:
+    terraform:
+      env: AWS
+      time: 15분
+      level: 초급
+      summary: ElastiCache Valkey 복제 그룹(Primary + Replica, Multi-AZ, 전송/저장 암호화)을 생성합니다.
+      steps:
+        - title: ElastiCache Valkey 리소스
+          file: iac/terraform/aws/06-data-services.tf
+        - title: 적용
+          lang: bash
+          code: |
+            terraform apply -target=aws_elasticache_replication_group.valkey
+            terraform output valkey_primary_endpoint
+      verify: |
+        aws elasticache describe-replication-groups \
+          --query 'ReplicationGroups[].{id:ReplicationGroupId,status:Status,engine:Engine}'
+    ansible:
+      env: On-Premise
+      time: 10분
+      level: 초급
+      summary: Valkey 공식 차트를 Ansible 로 설치합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["valkey"]}'
+      verify: |
+        kubectl -n cache get pods
+    helm:
+      env: Any Kubernetes
+      time: 10분
+      level: 초급
+      summary: Valkey 프로젝트가 직접 관리하는 공식 Helm 저장소로 설치합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            helm repo add valkey https://valkey.io/valkey-helm/
+            helm upgrade --install valkey valkey/valkey -n cache --create-namespace \
+              -f helm/values/valkey.yaml
+        - title: values
+          file: helm/values/valkey.yaml
+      verify: |
+        kubectl -n cache exec -it statefulset/valkey -- valkey-cli ping   # PONG
+      tips:
+        - "차트 값 키는 차트 버전에 따라 달라질 수 있으니 'helm show values valkey/valkey' 로 확인 후 조정하세요."
+
+- id: kafka
+  num: "09"
+  group: 데이터 & 메시징
+  title: Event Streaming
+  en: Apache Kafka 4.x (KRaft)
+  icon: stream
+  color: "#facc15"
+  oneline: 서비스 간 비동기 이벤트(주문 생성, 결제 완료 등)를 영속적으로 전달하는 이벤트 백본입니다.
+  desc: |
+    Kafka 는 **"방송국"** 입니다. 주문 서비스가 "주문 생성됨" 을 한 번 방송(발행)하면, 재고·배송·알림 서비스가 각자 채널을 맞춰(구독) 듣습니다.
+    발행자는 누가 듣는지 몰라도 되므로 서비스 간 결합도가 크게 낮아집니다. 또한 메시지가 디스크에 남아 있어 **재처리(replay)** 가 가능합니다.
+    **Kafka 4.x 부터 ZooKeeper 가 완전히 제거**되고 KRaft 모드만 지원합니다.
+  roles:
+    - "도메인 이벤트 발행/구독 (order.events, payment.events …)"
+    - "이벤트 소싱·CDC(Debezium) 파이프라인"
+    - "Saga 패턴의 보상 트랜잭션 트리거"
+  trend:
+    - "Kafka 4.0(2025-03) ZooKeeper 제거 → 4.x 라인 안정화, KRaft 전용"
+    - "Strimzi 1.x 는 v1 CRD API 만 지원 (구버전 CRD 제거)"
+    - "Queue 시맨틱(KIP-932 Share Group) 도입으로 일부 MQ 용도까지 흡수 시도"
+  tools:
+    - { name: Strimzi, tag: CNCF Incubating, desc: "K8s Kafka Operator 표준 (KafkaNodePool, Topic/User Operator)", pick: true }
+    - { name: Amazon MSK, tag: Managed, desc: "AWS 관리형 Kafka, IAM 인증" , pick: true}
+    - { name: Confluent Platform/Cloud, tag: Commercial, desc: "Schema Registry·커넥터 생태계" }
+    - { name: Redpanda, tag: Commercial (BSL), desc: "Kafka API 호환 단일 바이너리" }
+  pick: |
+    **기본: Strimzi(클러스터 내부, 환경 공통)**, 운영 인력이 부족하거나 대규모라면 **AWS: Amazon MSK** 로 전환(use_managed_kafka=true).
+  guides:
+    terraform:
+      env: AWS
+      time: 30~40분
+      level: 중급
+      summary: 두 가지 옵션을 제공합니다 — ① Strimzi Operator(helm_release) 또는 ② Amazon MSK(aws_msk_cluster).
+      steps:
+        - title: "옵션 ① Strimzi (기본값: addons.strimzi = true)"
+          lang: bash
+          code: |
+            terraform apply -target='helm_release.platform["strimzi"]'
+            kubectl apply -f helm/manifests/kafka-cluster.yaml
+        - title: "옵션 ② Amazon MSK (use_managed_kafka = true)"
+          file: iac/terraform/aws/06-data-services.tf
+        - title: MSK 적용
+          lang: bash
+          code: |
+            terraform apply -target=aws_msk_cluster.kafka
+            terraform output msk_bootstrap_brokers_iam
+      verify: |
+        kubectl -n kafka get kafka events -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+        aws kafka list-clusters-v2 --query 'ClusterInfoList[].{n:ClusterName,s:State}'
+      tips:
+        - "MSK kafka_version 은 리전별 지원 버전을 'aws kafka list-kafka-versions' 로 확인한 뒤 고정하세요."
+    ansible:
+      env: On-Premise
+      time: 20분
+      level: 중급
+      summary: Strimzi Operator 와 KRaft Kafka 클러스터(controller 3 + broker 3)를 구성합니다.
+      steps:
+        - title: 설치
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/30-platform-addons.yml -e '{"addon_only":["strimzi"]}'
+            ansible-playbook playbooks/40-platform-config.yml
+      verify: |
+        kubectl -n kafka get kafka,kafkanodepool,kafkatopic
+    helm:
+      env: Any Kubernetes
+      time: 20분
+      level: 중급
+      summary: Strimzi Helm 차트로 Operator 를 설치하고 KafkaNodePool/Kafka/KafkaTopic CR 을 적용합니다.
+      steps:
+        - title: Operator 설치
+          lang: bash
+          code: |
+            helm repo add strimzi https://strimzi.io/charts/
+            helm upgrade --install strimzi strimzi/strimzi-kafka-operator \
+              -n kafka --create-namespace -f helm/values/strimzi.yaml
+        - title: KRaft 클러스터 + 토픽
+          file: helm/manifests/kafka-cluster.yaml
+        - title: 적용
+          lang: bash
+          code: |
+            kubectl apply -f helm/manifests/kafka-cluster.yaml
+            kubectl -n kafka wait kafka/events --for=condition=Ready --timeout=15m
+      verify: |
+        kubectl -n kafka run kcat --rm -it --image=edenhill/kcat:1.7.1 -- \
+          -b events-kafka-bootstrap:9092 -L    # (내부 plain 리스너 추가 시)
+
+- id: mq
+  num: "10"
+  group: 데이터 & 메시징
+  title: Message Queue & Workers
+  en: RabbitMQ · Notification / Email Worker
+  icon: queue
+  color: "#fb923c"
+  oneline: 작업 단위(이메일 발송 등)를 큐에 넣고 워커가 하나씩 꺼내 처리. 재시도·지연·우선순위 처리가 필요한 업무에 적합합니다.
+  desc: |
+    Kafka 가 "방송"이라면 RabbitMQ 는 **"택배 접수창구"** 입니다. 한 건의 작업(택배)은 정확히 한 명의 기사(워커)가 가져가 처리하고, 실패하면 다시 접수(재시도)되거나 반송함(DLQ)으로 갑니다.
+    구성도에서는 Notification Worker 가 Kafka 이벤트를 받아 **이메일 작업을 RabbitMQ 에 적재**하고, Email Worker 가 이를 발송하는 흐름입니다.
+  roles:
+    - "작업 큐 (Work Queue) : 경쟁 소비자 패턴으로 수평 확장"
+    - "재시도/지연 큐, Dead Letter Exchange"
+    - "Quorum Queue 로 노드 장애에도 메시지 유실 방지"
+  trend:
+    - "RabbitMQ 4.x : 클래식 미러링 큐 제거 → Quorum Queue/Streams 가 기본"
+    - "공식 Cluster Operator + Messaging Topology Operator 로 큐·익스체인지를 선언형 관리"
+    - "Bitnami 차트 대신 공식 Operator 사용 권장"
+  tools:
+    - { name: RabbitMQ Cluster Operator, tag: OSS (Broadcom), desc: "공식 K8s Operator", pick: true }
+    - { name: Amazon MQ for RabbitMQ, tag: Managed, desc: "AWS 관리형 브로커", pick: true }
+    - { name: NATS (JetStream), tag: CNCF Incubating, desc: "경량 메시징 + 스트림, 엣지/IoT" }
+    - { name: KEDA, tag: CNCF Graduated, desc: "큐 길이 기반 워커 오토스케일링" }
+  pick: |
+    **RabbitMQ 4.x + Cluster Operator(Quorum Queue 기본)**, AWS 에서 운영 부담을 줄이려면 **Amazon MQ**. 워커는 **KEDA** 로 큐 길이에 맞춰 확장합니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 20분
+      level: 중급
+      summary: Amazon MQ for RabbitMQ 브로커를 생성하고 관리자 계정을 Secrets Manager 에 저장합니다. (use_managed_rabbitmq = true)
+      steps:
+        - title: Amazon MQ 리소스
+          file: iac/terraform/aws/06-data-services.tf
+        - title: 적용
+          lang: bash
+          code: |
+            terraform apply -target=aws_mq_broker.rabbitmq
+            terraform output rabbitmq_endpoints
+      tips:
+        - "engine_version 은 리전 지원 버전을 확인 후 고정하세요 (aws mq describe-broker-engine-types --engine-type RABBITMQ)."
+    ansible:
+      env: On-Premise
+      time: 15분
+      level: 초급
+      summary: 공식 Cluster Operator 매니페스트를 설치하고 3노드 RabbitmqCluster 를 생성합니다.
+      steps:
+        - title: 실행 (Operator + Cluster)
+          file: iac/ansible/playbooks/40-platform-config.yml
+      verify: |
+        kubectl -n messaging get rabbitmqcluster notify-mq
+        kubectl -n messaging exec notify-mq-server-0 -- rabbitmq-diagnostics cluster_status
+    helm:
+      env: Any Kubernetes
+      time: 15분
+      level: 초급
+      summary: RabbitMQ 는 공식 Helm 차트 대신 공식 Operator 매니페스트를 권장합니다. (Bitnami 차트 정책 변경)
+      steps:
+        - title: Operator 설치
+          lang: bash
+          code: |
+            kubectl apply -f https://github.com/rabbitmq/cluster-operator/releases/latest/download/cluster-operator.yml
+        - title: 클러스터 정의 (Quorum Queue 기본)
+          file: helm/manifests/rabbitmq-cluster.yaml
+        - title: 적용 및 접속정보
+          lang: bash
+          code: |
+            kubectl create ns messaging
+            kubectl apply -f helm/manifests/rabbitmq-cluster.yaml
+            kubectl -n messaging get secret notify-mq-default-user -o jsonpath='{.data.username}' | base64 -d
+      verify: |
+        kubectl -n messaging get pods -l app.kubernetes.io/name=notify-mq
+
+- id: external
+  num: "11"
+  group: 데이터 & 메시징
+  title: External Integration
+  en: Payment PG (Stripe 등) · Egress Control
+  icon: external
+  color: "#8b5cf6"
+  oneline: 결제대행(PG)·SMS·이메일 등 외부 API 연동 구간. 허용된 목적지로만 나가도록 Egress 를 통제합니다.
+  desc: |
+    외부 연동은 **"외부 협력업체로 나가는 출입문"** 입니다. 아무나 아무 곳으로 나가면 데이터 유출 경로가 되므로, 등록된 업체(호스트)로만 나가게 하고 출입 기록을 남깁니다.
+    구성도의 STRIPE(EXTERNAL) 는 Payment 서비스만 호출할 수 있어야 하며, 국내 프로젝트에서는 토스페이먼츠·KG이니시스·나이스페이 등 PG 사로 대체됩니다.
+  roles:
+    - "Egress 화이트리스트 (ServiceEntry / NetworkPolicy / NAT 고정 IP)"
+    - "외부 호출 타임아웃·재시도·서킷브레이커"
+    - "웹훅(결제 결과 통지) 수신 엔드포인트 보호 (서명 검증)"
+    - "PG 사 방화벽 등록을 위한 고정 Egress IP (NAT Gateway EIP)"
+  trend:
+    - "Zero Trust Egress : 메시(Egress Gateway)·Cilium FQDN 정책으로 도메인 단위 통제"
+    - "결제 멱등성 키(Idempotency-Key)·웹훅 서명 검증이 PG 연동의 기본 요구사항"
+  tools:
+    - { name: Istio ServiceEntry / Egress Gateway, tag: CNCF Graduated, desc: "외부 호스트 등록·모니터링", pick: true }
+    - { name: Cilium FQDN Network Policy, tag: CNCF Graduated, desc: "도메인 기반 L3/L4 Egress 차단" }
+    - { name: NAT Gateway (EIP), tag: Managed, desc: "PG 사 화이트리스트용 고정 IP", pick: true }
+  pick: |
+    **NAT Gateway 고정 IP + Istio ServiceEntry(+ 필요 시 Egress Gateway)** 조합. 결제 웹훅은 Gateway 에서 별도 HTTPRoute 와 IP 제한을 둡니다.
+  guides:
+    terraform:
+      env: AWS
+      time: 5분
+      level: 초급
+      summary: VPC 모듈이 생성한 NAT Gateway 의 EIP 를 조회하여 PG 사에 화이트리스트로 등록합니다. (운영은 AZ 별 NAT → IP 3개)
+      steps:
+        - title: VPC (NAT 설정)
+          file: iac/terraform/aws/01-vpc.tf
+        - title: 고정 IP 확인
+          lang: bash
+          code: |
+            aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=$(terraform output -raw vpc_id) \
+              --query 'NatGateways[].NatGatewayAddresses[].PublicIp'
+    ansible:
+      env: On-Premise
+      time: 10분
+      level: 초급
+      summary: 사내 방화벽 SNAT IP 를 PG 사에 등록하고, 클러스터에서는 ServiceEntry 로 목적지를 제한합니다.
+      steps:
+        - title: ServiceEntry 적용
+          lang: bash
+          code: |
+            cd iac/ansible
+            ansible-playbook playbooks/40-platform-config.yml   # istio-ambient.yaml 포함
+    helm:
+      env: Any Kubernetes
+      time: 10분
+      level: 초급
+      summary: Istio ServiceEntry 로 외부 PG 호스트를 등록하고 Payment 서비스만 호출하도록 제한합니다.
+      steps:
+        - title: ServiceEntry (istio-ambient.yaml 하단)
+          file: helm/manifests/istio-ambient.yaml
+        - title: (선택) 미등록 외부 호출 차단
+          lang: yaml
+          code: |
+            # istiod values - 메시 외부로의 미등록 트래픽 차단
+            meshConfig:
+              outboundTrafficPolicy:
+                mode: REGISTRY_ONLY
+      verify: |
+        kubectl -n shop exec deploy/payment -- curl -sI https://api.stripe.com   # 200/401
+        kubectl -n shop exec deploy/payment -- curl -sI https://example.org      # 차단(REGISTRY_ONLY)
+      tips:
+        - "ambient 모드에서 Egress 통제 기능은 버전별로 성숙도가 다릅니다. REGISTRY_ONLY 적용 전 사용 중인 Istio 버전 문서의 ambient egress(waypoint) 지원 범위를 확인하세요."

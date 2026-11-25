@@ -1,0 +1,9 @@
+# Kyverno : 정책 엔진 (CNCF Graduated, 2026-03)
+admissionController:
+  replicas: 3
+backgroundController:
+  replicas: 2
+cleanupController:
+  replicas: 2
+reportsController:
+  replicas: 2

@@ -1,0 +1,17 @@
+# (On-Premise) MetalLB L2 모드 IP 풀 - 네트워크팀에서 할당받은 대역으로 변경
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: public-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.10.200-192.168.10.220
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: public-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools: [public-pool]

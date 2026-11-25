@@ -1,0 +1,12 @@
+# Valkey 공식 Helm 차트 (valkey-io/valkey-helm) - Redis OSS 호환 캐시
+#   Bitnami 카탈로그 정책 변경(2025-08) 이후 프로젝트 공식 차트 사용 권장
+auth:
+  enabled: true
+replica:
+  enabled: true
+  replicas: 2
+persistence:
+  enabled: true
+  size: 8Gi
+metrics:
+  enabled: true

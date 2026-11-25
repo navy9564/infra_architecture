@@ -1,0 +1,39 @@
+---
+# containerd 2.x 설치 (Docker 공식 저장소의 containerd.io 패키지 사용)
+- name: Add Docker repo (RedHat)
+  ansible.builtin.yum_repository:
+    name: docker-ce
+    description: Docker CE
+    baseurl: https://download.docker.com/linux/rhel/$releasever/$basearch/stable
+    gpgkey: https://download.docker.com/linux/rhel/gpg
+    gpgcheck: true
+  when: ansible_os_family == 'RedHat'
+
+- name: Add Docker repo (Debian, deb822)
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: https://download.docker.com/linux/ubuntu
+    suites: ["{{ ansible_distribution_release }}"]
+    components: [stable]
+    signed_by: https://download.docker.com/linux/ubuntu/gpg
+  when: ansible_os_family == 'Debian'
+
+- name: Install containerd
+  ansible.builtin.package:
+    name: containerd.io
+    state: present
+    update_cache: "{{ ansible_os_family == 'Debian' }}"
+
+- name: Render containerd config (SystemdCgroup=true, v3 schema)
+  ansible.builtin.template:
+    src: config.toml.j2
+    dest: /etc/containerd/config.toml
+    mode: "0644"
+  notify: Restart containerd
+
+- name: Enable containerd
+  ansible.builtin.service:
+    name: containerd
+    state: started
+    enabled: true

@@ -1,0 +1,7 @@
+# Falco : 런타임 위협 탐지 (CNCF Graduated) - modern eBPF 드라이버
+driver:
+  kind: modern_ebpf
+falcosidekick:
+  enabled: true
+  webui:
+    enabled: false

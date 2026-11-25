@@ -1,0 +1,223 @@
+# =============================================================================
+# helmfile.yaml.gotmpl : 플랫폼 애드온 일괄 설치 (Kubernetes 배포판 무관 - EKS/AKS/GKE/kubeadm)
+#
+#   helmfile -e aws apply                     # AWS(EKS)
+#   helmfile -e onprem apply                  # On-Premise(kubeadm/RKE2 등)
+#   helmfile -e aws -l tier=observability apply   # 특정 계층만
+#
+#   버전 고정: versions.yaml 의 값을 채우면 해당 버전으로 설치 (빈 값 = 최신)
+# =============================================================================
+environments:
+  aws:
+    values:
+      - versions.yaml
+      - platform: aws
+  onprem:
+    values:
+      - versions.yaml
+      - platform: onprem
+---
+repositories:
+  - name: jetstack
+    url: https://charts.jetstack.io
+  - name: external-secrets
+    url: https://charts.external-secrets.io
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+  - name: open-telemetry
+    url: https://open-telemetry.github.io/opentelemetry-helm-charts
+  - name: argo
+    url: https://argoproj.github.io/argo-helm
+  - name: kyverno
+    url: https://kyverno.github.io/kyverno/
+  - name: cnpg
+    url: https://cloudnative-pg.github.io/charts
+  - name: strimzi
+    url: https://strimzi.io/charts/
+  - name: valkey
+    url: https://valkey.io/valkey-helm/
+  - name: metallb
+    url: https://metallb.github.io/metallb
+  - name: openbao
+    url: https://openbao.github.io/openbao-helm
+  - name: harbor
+    url: https://helm.goharbor.io
+  - name: kiali
+    url: https://kiali.org/helm-charts
+  - name: falcosecurity
+    url: https://falcosecurity.github.io/charts
+  - name: envoy-gateway
+    url: docker.io/envoyproxy
+    oci: true
+  - name: istio
+    url: ghcr.io/istio/release/charts
+    oci: true
+
+helmDefaults:
+  wait: true
+  timeout: 900
+  createNamespace: true
+  atomic: true
+
+releases:
+  # ------------------------------ 1. Network --------------------------------
+  - name: metallb
+    namespace: metallb-system
+    chart: metallb/metallb
+    version: {{ .Values.metallb | quote }}
+    installed: {{ eq .Values.platform "onprem" }}
+    labels: { tier: network }
+    values: [values/metallb.yaml]
+
+  - name: envoy-gateway
+    namespace: envoy-gateway-system
+    chart: envoy-gateway/gateway-helm
+    version: {{ .Values.envoyGateway | quote }}
+    labels: { tier: network }
+    values: [values/envoy-gateway.yaml]
+
+  - name: istio-base
+    namespace: istio-system
+    chart: istio/base
+    version: {{ .Values.istio | quote }}
+    labels: { tier: mesh }
+    needs: [envoy-gateway-system/envoy-gateway]
+
+  - name: istiod
+    namespace: istio-system
+    chart: istio/istiod
+    version: {{ .Values.istio | quote }}
+    labels: { tier: mesh }
+    needs: [istio-system/istio-base]
+    values: [values/istio-istiod.yaml]
+
+  - name: istio-cni
+    namespace: istio-system
+    chart: istio/cni
+    version: {{ .Values.istio | quote }}
+    labels: { tier: mesh }
+    needs: [istio-system/istiod]
+    values: [values/istio-cni.yaml]
+
+  - name: ztunnel
+    namespace: istio-system
+    chart: istio/ztunnel
+    version: {{ .Values.istio | quote }}
+    labels: { tier: mesh }
+    needs: [istio-system/istio-cni]
+
+  - name: kiali-server
+    namespace: istio-system
+    chart: kiali/kiali-server
+    version: {{ .Values.kiali | quote }}
+    labels: { tier: mesh }
+    needs: [istio-system/istiod]
+    values: [values/kiali.yaml]
+
+  # ------------------------------ 2. Security -------------------------------
+  - name: cert-manager
+    namespace: cert-manager
+    chart: jetstack/cert-manager
+    version: {{ .Values.certManager | quote }}
+    labels: { tier: security }
+    values: [values/cert-manager.yaml]
+
+  - name: openbao
+    namespace: openbao
+    chart: openbao/openbao
+    version: {{ .Values.openbao | quote }}
+    installed: {{ eq .Values.platform "onprem" }}
+    labels: { tier: security }
+    values: [values/openbao.yaml]
+
+  - name: external-secrets
+    namespace: external-secrets
+    chart: external-secrets/external-secrets
+    version: {{ .Values.externalSecrets | quote }}
+    labels: { tier: security }
+    values: [values/external-secrets.yaml]
+
+  - name: kyverno
+    namespace: kyverno
+    chart: kyverno/kyverno
+    version: {{ .Values.kyverno | quote }}
+    labels: { tier: security }
+    values: [values/kyverno.yaml]
+
+  - name: falco
+    namespace: falco
+    chart: falcosecurity/falco
+    version: {{ .Values.falco | quote }}
+    labels: { tier: security }
+    values: [values/falco.yaml]
+
+  # ---------------------------- 3. Observability ----------------------------
+  - name: kube-prometheus-stack
+    namespace: monitoring
+    chart: prometheus-community/kube-prometheus-stack
+    version: {{ .Values.kubePrometheusStack | quote }}
+    labels: { tier: observability }
+    values: [values/kube-prometheus-stack.yaml]
+
+  - name: loki
+    namespace: logging
+    chart: grafana/loki
+    version: {{ .Values.loki | quote }}
+    labels: { tier: observability }
+    values: [values/loki.yaml]
+
+  - name: alloy
+    namespace: logging
+    chart: grafana/alloy
+    version: {{ .Values.alloy | quote }}
+    labels: { tier: observability }
+    needs: [logging/loki]
+    values: [values/alloy.yaml]
+
+  - name: opentelemetry-operator
+    namespace: opentelemetry
+    chart: open-telemetry/opentelemetry-operator
+    version: {{ .Values.otelOperator | quote }}
+    labels: { tier: observability }
+    needs: [cert-manager/cert-manager]
+    values: [values/opentelemetry-operator.yaml]
+
+  # ------------------------------ 4. Delivery -------------------------------
+  - name: argo-cd
+    namespace: argocd
+    chart: argo/argo-cd
+    version: {{ .Values.argocd | quote }}
+    labels: { tier: delivery }
+    values: [values/argo-cd.yaml]
+
+  - name: harbor
+    namespace: harbor
+    chart: harbor/harbor
+    version: {{ .Values.harbor | quote }}
+    installed: {{ eq .Values.platform "onprem" }}
+    labels: { tier: delivery }
+    values: [values/harbor.yaml]
+
+  # ------------------------------ 5. Data -----------------------------------
+  - name: cloudnative-pg
+    namespace: cnpg-system
+    chart: cnpg/cloudnative-pg
+    version: {{ .Values.cnpg | quote }}
+    labels: { tier: data }
+    values: [values/cloudnative-pg.yaml]
+
+  - name: strimzi
+    namespace: kafka
+    chart: strimzi/strimzi-kafka-operator
+    version: {{ .Values.strimzi | quote }}
+    labels: { tier: data }
+    values: [values/strimzi.yaml]
+
+  - name: valkey
+    namespace: cache
+    chart: valkey/valkey
+    version: {{ .Values.valkey | quote }}
+    labels: { tier: data }
+    values: [values/valkey.yaml]

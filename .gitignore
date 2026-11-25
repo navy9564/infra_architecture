@@ -1,0 +1,26 @@
+# Terraform / OpenTofu
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+terraform.tfvars
+backend.tf
+.terraform.lock.hcl.bak
+
+# Ansible
+iac/ansible/inventory/hosts.ini
+*.retry
+
+# Secrets
+*.pem
+*.key
+.env
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+__pycache__/

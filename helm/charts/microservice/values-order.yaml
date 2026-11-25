@@ -1,0 +1,16 @@
+# 예시: order 서비스 오버라이드
+image:
+  repository: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop/order
+  tag: "1.4.2"
+envFromSecrets:
+  - order-db-credentials
+env:
+  - name: KAFKA_BOOTSTRAP
+    value: events-kafka-bootstrap.kafka:9093
+  - name: CACHE_HOST
+    value: valkey.cache:6379
+otel:
+  inject: java
+httpRoute:
+  enabled: true
+  pathPrefix: /api/orders

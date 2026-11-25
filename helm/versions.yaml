@@ -1,0 +1,22 @@
+# Helm 차트 버전 고정 파일
+#   ""(빈 값) = 최신 버전 설치 (PoC/개발 단계)
+#   운영 전환 시 'helm search repo <repo>/<chart> --versions' 로 검증 후 반드시 고정
+#   (Istio 는 OCI 차트이므로 'helm show chart oci://ghcr.io/istio/release/charts/istiod' 로 확인)
+metallb: ""
+envoyGateway: ""
+istio: ""
+kiali: ""
+certManager: ""
+openbao: ""
+externalSecrets: ""
+kyverno: ""
+falco: ""
+kubePrometheusStack: ""
+loki: ""
+alloy: ""
+otelOperator: ""
+argocd: ""
+harbor: ""
+cnpg: ""
+strimzi: ""
+valkey: ""

@@ -1,0 +1,18 @@
+# cert-manager : 내부 mTLS/Ingress 인증서 자동 발급·갱신 (Let's Encrypt, 사설 CA)
+crds:
+  enabled: true
+replicaCount: 2
+nodeSelector:
+  node-role/system: "true"
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+    effect: NoSchedule
+config:
+  apiVersion: controller.config.cert-manager.io/v1alpha1
+  kind: ControllerConfiguration
+  enableGatewayAPI: true
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true

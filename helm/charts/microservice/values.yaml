@@ -1,0 +1,63 @@
+# 공통 마이크로서비스 차트 기본값 - 서비스별로 values-<service>.yaml 에서 덮어쓴다.
+nameOverride: ""
+
+image:
+  repository: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop/order
+  tag: "1.0.0"          # latest 금지 (Kyverno 정책)
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+containerPort: 8080
+
+env: []
+#  - name: SPRING_PROFILES_ACTIVE
+#    value: prd
+
+# ExternalSecret 로 생성된 Secret 을 환경변수로 주입
+envFromSecrets: []
+#  - order-db-credentials
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+probes:
+  liveness:
+    path: /actuator/health/liveness
+  readiness:
+    path: /actuator/health/readiness
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  annotations: {}
+
+# OpenTelemetry 자동계측 (java | nodejs | python | dotnet | go)
+otel:
+  inject: ""            # 예: java
+
+# Gateway API 외부 노출 (내부 전용 서비스는 enabled: false)
+httpRoute:
+  enabled: false
+  gateway:
+    name: public
+    namespace: envoy-gateway-system
+    sectionName: https
+  hostnames:
+    - api.example.com
+  pathPrefix: /api/orders
+
+topologySpread: true
