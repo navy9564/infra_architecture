@@ -107,7 +107,8 @@ python3 scripts/build.py
 | Ansible | `ansible-playbook site.yml --syntax-check` (ansible-core 2.22) | ✅ 통과 |
 | YAML (values/manifests/chart values) | PyYAML 파싱 | ✅ 통과 |
 | 웹 문서 | Headless Chrome 렌더링 · 라우팅 · 콘솔 에러 | ✅ 에러 없음 |
-| `terraform validate` · `helm lint` | `.github/workflows/validate.yml` (GitHub Actions) | ⏳ 첫 push 후 Actions 결과 확인 필요 |
+| `terraform fmt -check` · `init` · `validate` | GitHub Actions (`validate.yml`, 실제 registry 모듈 다운로드) | ✅ 통과 |
+| `helm lint` · `helm template` (공통 차트) | GitHub Actions (`validate.yml`) | ✅ 통과 |
 | 실제 클러스터 설치 | — | ⏳ 미실시 (Step 2 에서 dev 계정으로 검증 예정) |
 
 > 차트 버전은 `versions.yaml` / `chart_versions` 가 비어 있으면 최신을 설치합니다. **운영 환경에서는 반드시 검증된 버전으로 고정**하십시오.
